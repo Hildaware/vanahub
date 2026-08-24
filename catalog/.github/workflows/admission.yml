@@ -48,6 +48,7 @@ jobs:
     needs: scan
     if: needs.scan.outputs.accepted == 'true'
     permissions:
+      actions: write
       contents: write
       pull-requests: write
     runs-on: ubuntu-latest
@@ -58,3 +59,11 @@ jobs:
           VH_REPOSITORY: ${{ github.repository }}
           VH_PR: ${{ github.event.pull_request.number }}
         run: gh pr merge "$VH_PR" --repo "$VH_REPOSITORY" --auto --squash
+      - name: Publish merged catalog
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VH_REPOSITORY: ${{ github.repository }}
+          VH_PR: ${{ github.event.pull_request.number }}
+        run: |
+          test "$(gh pr view "$VH_PR" --repo "$VH_REPOSITORY" --json state --jq .state)" = "MERGED"
+          gh workflow run publish.yml --repo "$VH_REPOSITORY" --ref main
