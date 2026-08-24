@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/xirepo/repository.schema.json",
+  "title": "Ashita addon repository index",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "repository", "generatedAt", "packages", "revocations"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "repository": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "name"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{1,63}$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 80 }
+      }
+    },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "packages": { "type": "array", "items": { "$ref": "package.schema.json" } },
+    "revocations": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["packageId", "sha256", "severity", "reason"],
+        "properties": {
+          "packageId": { "type": "string" },
+          "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "severity": { "enum": ["warning", "critical"] },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 1000 }
+        }
+      }
+    }
+  }
+}

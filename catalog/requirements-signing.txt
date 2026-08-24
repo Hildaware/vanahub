@@ -1,0 +1,2 @@
+# Version-pinned; the catalog workflow itself is pinned to a reviewed product commit.
+PyNaCl==1.5.0

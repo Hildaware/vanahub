@@ -1,0 +1,60 @@
+name: Catalog admission
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  scan:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    outputs:
+      accepted: ${{ steps.scan.outcome == 'success' }}
+    steps:
+      - name: Check out trusted catalog workflow
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: catalog-base
+      - name: Check out pinned scanner
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: OWNER/PRODUCT_REPOSITORY
+          ref: PINNED_PRODUCT_COMMIT
+          path: product
+      - name: Obtain and constrain changed manifest as data
+        env:
+          GH_TOKEN: ${{ github.token }}
+          XR_REPOSITORY: ${{ github.repository }}
+          XR_PR: ${{ github.event.pull_request.number }}
+          XR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api --paginate "repos/${XR_REPOSITORY}/pulls/${XR_PR}/files" > changed.json
+          python3 product/catalog/scripts/extract_pr_manifest.py changed.json "$XR_REPOSITORY" "$XR_HEAD_SHA" manifest.json
+      - name: Verify and scan
+        id: scan
+        uses: ./product/.github/actions/catalog-scan
+        with:
+          manifest: manifest.json
+          actor: ${{ github.event.pull_request.user.login }}
+          output: scan-report.json
+          previous-root: catalog-base/packages
+          token: ${{ github.token }}
+
+  accept:
+    needs: scan
+    if: needs.scan.outputs.accepted == 'true'
+    permissions:
+      contents: read
+      pull-requests: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enable protected auto-merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          XR_REPOSITORY: ${{ github.repository }}
+          XR_PR: ${{ github.event.pull_request.number }}
+        run: gh pr merge "$XR_PR" --repo "$XR_REPOSITORY" --auto --squash

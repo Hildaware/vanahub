@@ -1,0 +1,10 @@
+build/
+.cache/
+.DS_Store
+*.part
+*.tmp
+*.log
+__pycache__/
+.pytest_cache/
+.venv/
+catalog-output/

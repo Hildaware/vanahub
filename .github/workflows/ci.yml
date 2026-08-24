@@ -1,0 +1,35 @@
+name: Product CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - run: python3 -m unittest discover -s tests/python -v
+      - run: python3 -m py_compile tools/catalog_scan.py tools/build_catalog.py tools/verify_submission.py
+
+  portable-native:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - run: cmake -S . -B build -DXR_BUILD_ENGINE=OFF
+      - run: cmake --build build --config Release
+      - run: ctest --test-dir build -C Release --output-on-failure
+
+  win32-engine:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - run: cmake -S . -B build-win32 -A Win32 -DXR_BUILD_ENGINE=ON
+      - run: cmake --build build-win32 --config Release
+      - run: ctest --test-dir build-win32 -C Release --output-on-failure

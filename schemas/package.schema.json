@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/xirepo/package.schema.json",
+  "title": "Ashita addon package manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "id", "name", "description", "author", "maintainers",
+    "version", "changelog", "sourceUrl", "downloadUrl", "sha256",
+    "compressedSize", "archiveRoot", "entrypoint", "declaredCapabilities"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{1,63}$" },
+    "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "description": { "type": "string", "minLength": 1, "maxLength": 2000 },
+    "author": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "maintainers": {
+      "type": "array", "minItems": 1, "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$" }
+    },
+    "version": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$" },
+    "changelog": { "type": "string", "maxLength": 4000 },
+    "sourceUrl": { "type": "string", "pattern": "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/?$" },
+    "downloadUrl": { "type": "string", "pattern": "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/releases/download/[^/]+/[^/]+$" },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "compressedSize": { "type": "integer", "minimum": 1, "maximum": 52428800 },
+    "archiveRoot": { "type": "string", "maxLength": 200 },
+    "entrypoint": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+\\.lua$" },
+    "iconUrl": { "type": "string", "format": "uri" },
+    "declaredCapabilities": {
+      "type": "array", "uniqueItems": true,
+      "items": { "type": "string", "enum": ["ui", "game-state-read", "packet-read", "chat-output", "command-handler", "settings-write", "bundled-file-read"] }
+    }
+  }
+}

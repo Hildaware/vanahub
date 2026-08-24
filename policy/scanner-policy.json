@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "limits": {
+    "compressedBytes": 52428800,
+    "expandedBytes": 209715200,
+    "entryBytes": 52428800,
+    "entries": 4096,
+    "compressionRatio": 200
+  },
+  "allowedExtensions": [".lua", ".json", ".ini", ".xml", ".txt", ".md", ".png", ".jpg", ".jpeg", ".dds", ".wav"],
+  "privilegedPackageIds": ["xirepo"],
+  "allowedModules": ["common", "chat", "imgui", "settings", "json", "ffxi.enums", "ffxi.recast", "ffxi.targets", "ffxi.vanatime", "ffxi.weather"],
+  "blockedSymbols": [
+    "ffi", "socket", "ssl.https", "os.execute", "io.popen", "package.loadlib",
+    "loadstring", "load", "dofile", "debug", "ashita.memory.write",
+    "InjectPacket", "QueueCommand", "CreateProcess", "ShellExecute", "WinExec",
+    "LoadLibrary", "RegSetValue", "URLDownloadToFile"
+  ]
+}

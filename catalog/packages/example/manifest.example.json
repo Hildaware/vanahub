@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "example-addon",
+  "name": "Example Addon",
+  "description": "Replace this template with a real screened addon.",
+  "author": "example",
+  "maintainers": ["example"],
+  "version": "1.0.0",
+  "changelog": "Initial release.",
+  "sourceUrl": "https://github.com/example/example-addon",
+  "downloadUrl": "https://github.com/example/example-addon/releases/download/v1.0.0/example-addon.zip",
+  "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "compressedSize": 1,
+  "archiveRoot": "example-addon",
+  "entrypoint": "example-addon.lua",
+  "declaredCapabilities": ["ui"]
+}

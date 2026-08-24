@@ -1,0 +1,43 @@
+name: Publish signed catalog
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read
+  pages: write
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: github-pages
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          path: catalog
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: OWNER/PRODUCT_REPOSITORY
+          ref: PINNED_PRODUCT_COMMIT
+          path: product
+      - name: Install signing dependency
+        run: python3 -m pip install --disable-pip-version-check -r product/catalog/requirements-signing.txt
+      - name: Re-scan and build index
+        env:
+          XIREPO_ED25519_PRIVATE_KEY: ${{ secrets.XIREPO_ED25519_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          manifests=(catalog/packages/*/manifest.json)
+          for manifest in "${manifests[@]}"; do
+            python3 product/tools/catalog_scan.py "$manifest" --output /tmp/scan-report.json
+          done
+          python3 product/tools/build_catalog.py catalog/packages public \
+            --revocations catalog/revocations.json
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
+        with:
+          path: public
+      - uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5

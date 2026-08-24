@@ -1,0 +1,40 @@
+name: Scan Ashita addon artifact
+description: Treats a package manifest and release ZIP as untrusted data and emits a report.
+inputs:
+  manifest:
+    description: Path to package manifest
+    required: true
+  actor:
+    description: GitHub actor submitting the package
+    required: true
+  output:
+    description: Scan report path
+    required: false
+    default: scan-report.json
+  previous-root:
+    description: Trusted base catalog packages directory
+    required: false
+    default: ''
+  token:
+    description: GitHub token used for source authorization checks
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Verify source authorization
+      shell: bash
+      env:
+        XR_MANIFEST: ${{ inputs.manifest }}
+        XR_ACTOR: ${{ inputs.actor }}
+        XR_PREVIOUS_ROOT: ${{ inputs['previous-root'] }}
+        GITHUB_TOKEN: ${{ inputs.token }}
+      run: |
+        args=("$GITHUB_ACTION_PATH/../../../tools/verify_submission.py" "$XR_MANIFEST" --actor "$XR_ACTOR")
+        if [[ -n "$XR_PREVIOUS_ROOT" ]]; then args+=(--previous-root "$XR_PREVIOUS_ROOT"); fi
+        python3 "${args[@]}"
+    - name: Scan artifact
+      shell: bash
+      env:
+        XR_MANIFEST: ${{ inputs.manifest }}
+        XR_OUTPUT: ${{ inputs.output }}
+      run: python3 "$GITHUB_ACTION_PATH/../../../tools/catalog_scan.py" "$XR_MANIFEST" --output "$XR_OUTPUT"
