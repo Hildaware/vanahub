@@ -1,8 +1,7 @@
-# Ashita Addon Delivery System
+# VanaHub
 
-This repository implements a secure,
-Dalamud-style addon browser for Ashita v4. `xirepo` is a temporary internal
-namespace; the public product name is intentionally undecided.
+VanaHub is a secure, Dalamud-style addon browser and delivery system for
+Ashita v4.
 
 The product has three parts:
 
@@ -22,12 +21,12 @@ Build the macOS cross-compiled package with:
 ```sh
 cmake -S . -B build/win32 -G Ninja \
   --toolchain cmake/toolchains/windows-x86-mingw.cmake
-cmake --build build/win32 --target xirepo_package
+cmake --build build/win32 --target vanahub_package
 ```
 
-The result is `build/win32/package/addons/xirepo`. The built-in catalog stays
+The result is `build/win32/package/addons/vanahub`. The built-in catalog stays
 disabled until its separate repository URLs and verification key are filled
-into `addon/xirepo/versions/0.1.0/builtin.lua`.
+into `addon/vanahub/versions/0.1.0/builtin.lua`.
 
 For the local HorizonXI installation, `make deploy-local` builds and deploys
-directly to `/Users/bferrari/Games/FFXI/HorizonXI/addons/xirepo`.
+directly to `/Users/bferrari/Games/FFXI/HorizonXI/addons/vanahub`.

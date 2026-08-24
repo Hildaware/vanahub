@@ -6,7 +6,7 @@ local json = require 'json';
 local backend = require 'backend';
 local builtin = require 'builtin';
 
-local config_root = AshitaCore:GetInstallPath() .. '\\config\\addons\\xirepo\\';
+local config_root = AshitaCore:GetInstallPath() .. '\\config\\addons\\vanahub\\';
 local state_path = config_root .. 'state.json';
 local repository_path = config_root .. 'repositories.json';
 local state = {
@@ -115,7 +115,7 @@ end
 
 local function start_install(package, allow_elevated)
     local job, err = backend.start({
-        operation = package.id == 'xirepo' and 'stageSelfUpdate' or (state.installed[package.id] and 'update' or 'install'),
+        operation = package.id == 'vanahub' and 'stageSelfUpdate' or (state.installed[package.id] and 'update' or 'install'),
         packageId = package.id, url = package.downloadUrl, sha256 = package.sha256,
         version = package.version,
         archiveRoot = package.archiveRoot or '', entrypoint = package.entrypoint,
@@ -143,7 +143,7 @@ local function complete_operation()
                 sha256 = package.sha256, source = package._repository.id,
             };
             save_state();
-            if package.id == 'xirepo' then state.notice = 'Package manager update staged; it will activate on the next Ashita launch.';
+            if package.id == 'vanahub' then state.notice = 'Package manager update staged; it will activate on the next Ashita launch.';
             else state.notice = (package.name or package.id) .. ' installed. Reload it explicitly when ready.'; end
         elseif context.kind == 'uninstall' then
             state.installed[context.packageId] = nil; save_state();
@@ -154,12 +154,12 @@ local function complete_operation()
 end
 
 local function print_help()
-    print(chat.header('xirepo'):append(chat.message('Commands: /xirepo, /xirepo show, /xirepo hide')));
+    print(chat.header('VanaHub'):append(chat.message('Commands: /vanahub, /vanahub show, /vanahub hide')));
 end
 
-ashita.events.register('command', 'xirepo_command', function (e)
+ashita.events.register('command', 'vanahub_command', function (e)
     local args = e.command:args();
-    if (#args == 0 or not args[1]:ieq('/xirepo')) then return; end
+    if (#args == 0 or not args[1]:ieq('/vanahub')) then return; end
     e.blocked = true;
     if (#args == 1) then state.visible[1] = not state.visible[1]; return; end
     if (args[2]:ieq('show')) then state.visible[1] = true; return; end
@@ -170,7 +170,7 @@ end);
 local function draw_engine_status()
     if not backend.available then
         imgui.TextColored({ 1.0, 0.45, 0.35, 1.0 }, 'Native engine unavailable');
-        imgui.TextWrapped(backend.error or 'Build and deploy xirepo_engine.dll.'); return;
+        imgui.TextWrapped(backend.error or 'Build and deploy vanahub_engine.dll.'); return;
     end
     imgui.TextColored({ 0.35, 0.85, 0.45, 1.0 }, 'Native engine ready');
     if state.operation ~= nil then
@@ -281,12 +281,12 @@ local version_root = addon.path .. 'versions\\' .. (addon.active_version or addo
 backend.initialize(version_root, builtin.public_key);
 if backend.available and builtin.index_url ~= '' then start_repository_refresh(state.repositories[1]); end
 
-ashita.events.register('d3d_present', 'xirepo_render', function ()
+ashita.events.register('d3d_present', 'vanahub_render', function ()
     if not state.visible[1] then return; end
     imgui.SetNextWindowSize({ 800, 560 }, ImGuiCond_FirstUseEver);
-    if imgui.Begin('Addon Browser##xirepo', state.visible, bit.bor(ImGuiWindowFlags_MenuBar, ImGuiWindowFlags_NoCollapse)) then
+    if imgui.Begin('VanaHub##vanahub', state.visible, bit.bor(ImGuiWindowFlags_MenuBar, ImGuiWindowFlags_NoCollapse)) then
         if state.notice ~= nil then imgui.TextWrapped(state.notice); imgui.Separator(); end
-        if imgui.BeginTabBar('##xirepo-tabs') then
+        if imgui.BeginTabBar('##vanahub-tabs') then
             if imgui.BeginTabItem('Browse') then draw_browse(); imgui.EndTabItem(); end
             if imgui.BeginTabItem('Installed') then draw_installed(); imgui.EndTabItem(); end
             if imgui.BeginTabItem('Repositories') then draw_repositories(); imgui.EndTabItem(); end
@@ -297,5 +297,5 @@ ashita.events.register('d3d_present', 'xirepo_render', function ()
     imgui.End();
 end);
 
-ashita.events.register('unload', 'xirepo_unload', function () save_state(); backend.shutdown(); end);
-print(chat.header('xirepo'):append(chat.message('Loaded. Use /xirepo to open the addon browser.')));
+ashita.events.register('unload', 'vanahub_unload', function () save_state(); backend.shutdown(); end);
+print(chat.header('VanaHub'):append(chat.message('Loaded. Use /vanahub to open the addon browser.')));

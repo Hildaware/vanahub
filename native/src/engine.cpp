@@ -1,5 +1,5 @@
-#include "xirepo/api.h"
-#include "xirepo/core.hpp"
+#include "vanahub/api.h"
+#include "vanahub/core.hpp"
 
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -139,7 +139,7 @@ std::string sha256_file(const fs::path& path) {
 }
 
 struct job {
-    xr_job_id id{};
+    vh_job_id id{};
     std::atomic_bool cancel{};
     mutable std::mutex mutex;
     std::string phase{"queued"};
@@ -147,23 +147,23 @@ struct job {
     std::uint64_t completed{};
     std::uint64_t total{};
     bool terminal{};
-    xr_result result{XR_OK};
+    vh_result result{VH_OK};
     std::jthread worker;
 
     void update(std::string next, std::string detail = {}) {
         std::scoped_lock lock(mutex); phase = std::move(next); message = std::move(detail);
     }
-    void finish(xr_result value, std::string detail = {}) {
+    void finish(vh_result value, std::string detail = {}) {
         std::scoped_lock lock(mutex); result = value; terminal = true;
-        phase = value == XR_OK ? "complete" : (value == XR_CANCELLED ? "cancelled" : "failed");
+        phase = value == VH_OK ? "complete" : (value == VH_CANCELLED ? "cancelled" : "failed");
         message = std::move(detail);
     }
     std::string status() const {
         std::scoped_lock lock(mutex);
         std::ostringstream out;
         out << "{\"schemaVersion\":1,\"jobId\":" << id
-            << ",\"phase\":\"" << xirepo::json_escape(phase) << "\""
-            << ",\"message\":\"" << xirepo::json_escape(message) << "\""
+            << ",\"phase\":\"" << vanahub::json_escape(phase) << "\""
+            << ",\"message\":\"" << vanahub::json_escape(message) << "\""
             << ",\"completed\":" << completed << ",\"total\":" << total
             << ",\"terminal\":" << (terminal ? "true" : "false")
             << ",\"result\":" << static_cast<int>(result) << "}";
@@ -268,7 +268,7 @@ bool download_file(job& current, const std::string& url, const fs::path& destina
     const std::wstring host(components.lpszHostName, components.dwHostNameLength);
     std::wstring path(components.lpszUrlPath, components.dwUrlPathLength);
     if (components.dwExtraInfoLength) path.append(components.lpszExtraInfo, components.dwExtraInfoLength);
-    HINTERNET session = WinHttpOpen(L"xirepo-engine/0.1", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, nullptr, nullptr, 0);
+    HINTERNET session = WinHttpOpen(L"vanahub-engine/0.1", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, nullptr, nullptr, 0);
     if (!session) { error = "WinHttpOpen failed"; return false; }
     WinHttpSetTimeouts(session, 15000, 15000, 30000, 30000);
     HINTERNET connection = WinHttpConnect(session, host.c_str(), components.nPort, 0);
@@ -352,7 +352,7 @@ bool inspect_and_extract(job& current, const fs::path& archive, const fs::path& 
         if (name.empty()) { code = mz_zip_reader_goto_next_entry(reader); continue; }
         const auto is_directory = mz_zip_reader_entry_is_dir(reader) == MZ_OK;
         std::string reason;
-        if (!xirepo::is_safe_relative_path(name, &reason)) { error = "Unsafe ZIP path: " + name + " (" + reason + ")"; break; }
+        if (!vanahub::is_safe_relative_path(name, &reason)) { error = "Unsafe ZIP path: " + name + " (" + reason + ")"; break; }
         if (mz_zip_attrib_is_symlink(info->external_fa, info->version_madeby) == MZ_OK || info->linkname != nullptr) {
             error = "ZIP symlinks are prohibited"; break;
         }
@@ -373,15 +373,15 @@ bool inspect_and_extract(job& current, const fs::path& archive, const fs::path& 
         auto relative = prefix.empty() ? name : name.substr(prefix.size());
         if (relative.empty()) { code = mz_zip_reader_goto_next_entry(reader); continue; }
         const auto engine_binary = allow_engine_binary &&
-            xirepo::ascii_casefold(relative) == "bin/xirepo_engine.dll";
-        if (!xirepo::is_allowed_extension(relative) && !engine_binary && !is_directory) {
+            vanahub::ascii_casefold(relative) == "bin/vanahub_engine.dll";
+        if (!vanahub::is_allowed_extension(relative) && !engine_binary && !is_directory) {
             error = "Prohibited archive file type: " + relative; break;
         }
-        const auto folded = xirepo::ascii_casefold(relative);
+        const auto folded = vanahub::ascii_casefold(relative);
         if (destinations.contains(folded)) { error = "Duplicate or case-colliding ZIP entry"; break; }
         destinations.emplace(folded, relative);
         if (destinations.size() > 4096) { error = "ZIP entry-count limit exceeded"; break; }
-        if (xirepo::ascii_casefold(relative) == xirepo::ascii_casefold(entrypoint)) found_entrypoint = true;
+        if (vanahub::ascii_casefold(relative) == vanahub::ascii_casefold(entrypoint)) found_entrypoint = true;
         code = mz_zip_reader_goto_next_entry(reader);
     }
     if (error.empty() && !found_entrypoint) error = "Declared entrypoint not found";
@@ -407,7 +407,7 @@ bool inspect_and_extract(job& current, const fs::path& archive, const fs::path& 
                         if (destination.extension() == L".lua") {
                             std::ifstream lua(destination, std::ios::binary);
                             std::string text((std::istreambuf_iterator<char>(lua)), {});
-                            if (!allow_elevated && !xirepo::scan_lua(text, relative).empty()) { error = "Lua source violates restricted policy: " + relative; break; }
+                            if (!allow_elevated && !vanahub::scan_lua(text, relative).empty()) { error = "Lua source violates restricted policy: " + relative; break; }
                         }
                     }
                 }
@@ -421,40 +421,40 @@ bool inspect_and_extract(job& current, const fs::path& archive, const fs::path& 
 }
 
 void write_ownership(const fs::path& root, const std::vector<std::string>& files) {
-    std::ofstream output(root / ".xirepo-owned", std::ios::binary | std::ios::trunc);
+    std::ofstream output(root / ".vanahub-owned", std::ios::binary | std::ios::trunc);
     for (const auto& file : files) output << file << '\n';
 }
 
 std::vector<std::string> read_ownership(const fs::path& root) {
     std::vector<std::string> files;
-    std::ifstream input(root / ".xirepo-owned", std::ios::binary);
-    for (std::string line; std::getline(input, line);) if (xirepo::is_safe_relative_path(line)) files.push_back(line);
+    std::ifstream input(root / ".vanahub-owned", std::ios::binary);
+    for (std::string line; std::getline(input, line);) if (vanahub::is_safe_relative_path(line)) files.push_back(line);
     return files;
 }
 
 } // namespace
 
-struct xr_engine {
+struct vh_engine {
     fs::path install_root;
     fs::path cache_root;
     std::string builtin_public_key;
-    std::atomic<xr_job_id> next_id{1};
+    std::atomic<vh_job_id> next_id{1};
     std::mutex jobs_mutex;
     std::mutex mutation_mutex;
-    std::map<xr_job_id, std::shared_ptr<job>> jobs;
+    std::map<vh_job_id, std::shared_ptr<job>> jobs;
     std::atomic_bool stopping{};
 };
 
 namespace {
 
-void execute_job(xr_engine* engine, const std::shared_ptr<job>& current, std::string request) {
+void execute_job(vh_engine* engine, const std::shared_ptr<job>& current, std::string request) {
     const auto operation = json_string(request, "operation");
     const auto package_id = json_string(request, "packageId");
-    if (!xirepo::is_safe_package_id(package_id)) { current->finish(XR_INVALID_ARGUMENT, "Invalid packageId"); return; }
+    if (!vanahub::is_safe_package_id(package_id)) { current->finish(VH_INVALID_ARGUMENT, "Invalid packageId"); return; }
 
     if (operation == "fetchRepository") {
         const auto url = json_string(request, "url");
-        const auto expected_hash = xirepo::ascii_casefold(json_string(request, "sha256"));
+        const auto expected_hash = vanahub::ascii_casefold(json_string(request, "sha256"));
         const auto repositories = engine->cache_root / L"repositories";
         const auto destination = repositories / (widen(package_id) + L".json");
         const auto partial = destination.wstring() + L".part";
@@ -463,11 +463,11 @@ void execute_job(xr_engine* engine, const std::shared_ptr<job>& current, std::st
         std::string error;
         if (!download_file(*current, url, partial, json_bool(request, "allowLocal", false), false, error)) {
             std::error_code ec; fs::remove(partial, ec);
-            current->finish(current->cancel.load() ? XR_CANCELLED : XR_NETWORK_ERROR, error); return;
+            current->finish(current->cancel.load() ? VH_CANCELLED : VH_NETWORK_ERROR, error); return;
         }
         if (!expected_hash.empty() && sha256_file(partial) != expected_hash) {
             std::error_code ec; fs::remove(partial, ec);
-            current->finish(XR_HASH_MISMATCH, "Repository SHA-256 mismatch"); return;
+            current->finish(VH_HASH_MISMATCH, "Repository SHA-256 mismatch"); return;
         }
         if (json_bool(request, "requireSignature", false)) {
             const auto signature_url = json_string(request, "signatureUrl");
@@ -475,45 +475,45 @@ void execute_job(xr_engine* engine, const std::shared_ptr<job>& current, std::st
                 !download_file(*current, signature_url, signature_partial, false, false, error) ||
                 !verify_catalog_signature(partial, signature_partial, engine->builtin_public_key, error)) {
                 std::error_code ec; fs::remove(partial, ec); fs::remove(signature_partial, ec);
-                current->finish(XR_SCAN_REJECTED, error.empty() ? "Catalog signature is required" : error); return;
+                current->finish(VH_SCAN_REJECTED, error.empty() ? "Catalog signature is required" : error); return;
             }
         }
         std::error_code ec; fs::create_directories(repositories, ec); fs::rename(partial, destination, ec);
-        if (ec) { fs::remove(partial, ec); current->finish(XR_FILESYSTEM_ERROR, "Could not activate repository cache"); return; }
+        if (ec) { fs::remove(partial, ec); current->finish(VH_FILESYSTEM_ERROR, "Could not activate repository cache"); return; }
         std::error_code cleanup_ec; fs::remove(signature_partial, cleanup_ec);
-        current->finish(XR_OK, destination.string()); return;
+        current->finish(VH_OK, destination.string()); return;
     }
 
     std::scoped_lock mutation(engine->mutation_mutex);
-    if (current->cancel.load()) { current->finish(XR_CANCELLED); return; }
+    if (current->cancel.load()) { current->finish(VH_CANCELLED); return; }
     auto target = engine->install_root / widen(package_id);
 
     if (operation == "uninstall") {
         current->update("committing", "Removing package-owned files");
         std::error_code ec;
         for (const auto& relative : read_ownership(target)) fs::remove(target / widen(relative), ec);
-        fs::remove(target / L".xirepo-owned", ec);
+        fs::remove(target / L".vanahub-owned", ec);
         for (auto it = fs::recursive_directory_iterator(target, fs::directory_options::skip_permission_denied, ec); !ec && it != fs::recursive_directory_iterator(); ++it) {}
         fs::remove(target, ec);
-        current->finish(XR_OK); return;
+        current->finish(VH_OK); return;
     }
     const auto self_update = operation == "stageSelfUpdate";
     if (operation != "install" && operation != "update" && !self_update) {
-        current->finish(XR_INVALID_ARGUMENT, "Unsupported operation"); return;
+        current->finish(VH_INVALID_ARGUMENT, "Unsupported operation"); return;
     }
 
     const auto url = json_string(request, "url");
-    const auto expected_hash = xirepo::ascii_casefold(json_string(request, "sha256"));
+    const auto expected_hash = vanahub::ascii_casefold(json_string(request, "sha256"));
     const auto root = json_string(request, "archiveRoot");
     const auto entrypoint = json_string(request, "entrypoint");
     const auto version = json_string(request, "version");
     const auto allow_elevated = json_bool(request, "allowElevated", false);
-    if (url.empty() || expected_hash.size() != 64 || !xirepo::is_safe_relative_path(entrypoint) ||
-        (self_update && (package_id != "xirepo" || !xirepo::is_safe_package_id(version) || allow_elevated ||
+    if (url.empty() || expected_hash.size() != 64 || !vanahub::is_safe_relative_path(entrypoint) ||
+        (self_update && (package_id != "vanahub" || !vanahub::is_safe_package_id(version) || allow_elevated ||
                          !json_bool(request, "githubOnly", false) || json_bool(request, "allowLocal", false)))) {
-        current->finish(XR_INVALID_ARGUMENT, "Invalid install request"); return;
+        current->finish(VH_INVALID_ARGUMENT, "Invalid install request"); return;
     }
-    if (self_update) target = engine->install_root / L"xirepo" / L"versions" / widen(version);
+    if (self_update) target = engine->install_root / L"vanahub" / L"versions" / widen(version);
 
     const auto transaction = engine->cache_root / L"transactions" / std::to_wstring(current->id);
     const auto archive = transaction / L"package.zip.part";
@@ -521,42 +521,42 @@ void execute_job(xr_engine* engine, const std::shared_ptr<job>& current, std::st
     const auto backup = transaction / L"backup";
     std::error_code ec;
     fs::remove_all(transaction, ec); fs::create_directories(transaction, ec);
-    { std::ofstream journal(transaction / L"transaction.json"); journal << "{\"phase\":\"downloading\",\"packageId\":\"" << xirepo::json_escape(package_id) << "\"}\n"; }
+    { std::ofstream journal(transaction / L"transaction.json"); journal << "{\"phase\":\"downloading\",\"packageId\":\"" << vanahub::json_escape(package_id) << "\"}\n"; }
 
     current->update("downloading", "Downloading release asset");
     std::string error;
     if (!download_file(*current, url, archive, json_bool(request, "allowLocal", false),
                        json_bool(request, "githubOnly", false), error)) {
         fs::remove_all(transaction, ec);
-        current->finish(current->cancel.load() ? XR_CANCELLED : XR_NETWORK_ERROR, error); return;
+        current->finish(current->cancel.load() ? VH_CANCELLED : VH_NETWORK_ERROR, error); return;
     }
     current->update("hashing", "Verifying SHA-256");
-    if (sha256_file(archive) != expected_hash) { fs::remove_all(transaction, ec); current->finish(XR_HASH_MISMATCH, "SHA-256 mismatch"); return; }
+    if (sha256_file(archive) != expected_hash) { fs::remove_all(transaction, ec); current->finish(VH_HASH_MISMATCH, "SHA-256 mismatch"); return; }
     current->update("inspecting", "Inspecting archive paths and source");
     std::vector<std::string> owned;
     if (!inspect_and_extract(*current, archive, staging, root, entrypoint, allow_elevated,
                              self_update, owned, error)) {
-        fs::remove_all(transaction, ec); current->finish(error.find("policy") != std::string::npos ? XR_SCAN_REJECTED : XR_ARCHIVE_ERROR, error); return;
+        fs::remove_all(transaction, ec); current->finish(error.find("policy") != std::string::npos ? VH_SCAN_REJECTED : VH_ARCHIVE_ERROR, error); return;
     }
     if (self_update) {
         write_ownership(staging, owned);
         current->update("committing", "Staging package manager update for next launch");
         if (fs::exists(target)) {
             fs::remove_all(transaction, ec);
-            current->finish(XR_FILESYSTEM_ERROR, "This package manager version is already staged"); return;
+            current->finish(VH_FILESYSTEM_ERROR, "This package manager version is already staged"); return;
         }
         fs::create_directories(target.parent_path(), ec);
         fs::rename(staging, target, ec);
-        if (ec) { fs::remove_all(transaction, ec); current->finish(XR_FILESYSTEM_ERROR, "Could not stage package manager update"); return; }
-        const auto manager_root = engine->install_root / L"xirepo";
+        if (ec) { fs::remove_all(transaction, ec); current->finish(VH_FILESYSTEM_ERROR, "Could not stage package manager update"); return; }
+        const auto manager_root = engine->install_root / L"vanahub";
         const auto pending_tmp = manager_root / L"pending.txt.tmp";
         { std::ofstream pending(pending_tmp, std::ios::binary | std::ios::trunc); pending << version << '\n'; }
         fs::rename(pending_tmp, manager_root / L"pending.txt", ec);
         if (ec) {
             fs::remove_all(target, ec); fs::remove_all(transaction, ec);
-            current->finish(XR_FILESYSTEM_ERROR, "Could not activate staged update marker"); return;
+            current->finish(VH_FILESYSTEM_ERROR, "Could not activate staged update marker"); return;
         }
-        fs::remove_all(transaction, ec); current->finish(XR_OK); return;
+        fs::remove_all(transaction, ec); current->finish(VH_OK); return;
     }
 
     // Preserve untracked files from an existing managed installation.
@@ -566,68 +566,68 @@ void execute_job(xr_engine* engine, const std::shared_ptr<job>& current, std::st
         for (fs::recursive_directory_iterator it(target, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end; ++it) {
             if (!it->is_regular_file()) continue;
             auto relative = fs::relative(it->path(), target, ec).generic_string();
-            if (relative == ".xirepo-owned" || previous.contains(relative)) continue;
+            if (relative == ".vanahub-owned" || previous.contains(relative)) continue;
             auto destination = staging / fs::relative(it->path(), target, ec);
             if (!fs::exists(destination)) { fs::create_directories(destination.parent_path(), ec); fs::copy_file(it->path(), destination, ec); }
         }
     }
     write_ownership(staging, owned);
     current->update("backing_up", "Backing up installed version");
-    if (fs::exists(target)) { fs::remove_all(backup, ec); fs::rename(target, backup, ec); if (ec) { current->finish(XR_FILESYSTEM_ERROR, "Could not back up existing addon"); return; } }
+    if (fs::exists(target)) { fs::remove_all(backup, ec); fs::rename(target, backup, ec); if (ec) { current->finish(VH_FILESYSTEM_ERROR, "Could not back up existing addon"); return; } }
     current->update("committing", "Activating staged version");
     fs::create_directories(target.parent_path(), ec); fs::rename(staging, target, ec);
     if (ec) {
         std::error_code rollback_ec;
         if (fs::exists(backup)) fs::rename(backup, target, rollback_ec);
-        current->finish(XR_FILESYSTEM_ERROR, "Commit failed; previous version restored"); return;
+        current->finish(VH_FILESYSTEM_ERROR, "Commit failed; previous version restored"); return;
     }
     fs::remove_all(transaction, ec);
-    current->finish(XR_OK);
+    current->finish(VH_OK);
 }
 
 } // namespace
 
-uint32_t XR_CALL xr_abi_version(void) { return XR_ABI_VERSION; }
+uint32_t VH_CALL vh_abi_version(void) { return VH_ABI_VERSION; }
 
-xr_result XR_CALL xr_engine_create(const char* config_json, xr_engine** output) {
-    if (!config_json || !output) return XR_INVALID_ARGUMENT;
+vh_result VH_CALL vh_engine_create(const char* config_json, vh_engine** output) {
+    if (!config_json || !output) return VH_INVALID_ARGUMENT;
     const std::string config(config_json);
     const auto install = json_string(config, "installRoot");
     const auto cache = json_string(config, "cacheRoot");
-    if (install.empty() || cache.empty()) return XR_INVALID_ARGUMENT;
+    if (install.empty() || cache.empty()) return VH_INVALID_ARGUMENT;
     try {
-        auto engine = std::make_unique<xr_engine>();
+        auto engine = std::make_unique<vh_engine>();
         engine->install_root = fs::path(widen(install));
         engine->cache_root = fs::path(widen(cache));
         engine->builtin_public_key = json_string(config, "builtinPublicKey");
         fs::create_directories(engine->install_root);
         fs::create_directories(engine->cache_root / L"transactions");
-        *output = engine.release(); return XR_OK;
-    } catch (...) { return XR_INTERNAL_ERROR; }
+        *output = engine.release(); return VH_OK;
+    } catch (...) { return VH_INTERNAL_ERROR; }
 }
 
-xr_result XR_CALL xr_engine_recover(xr_engine* engine) {
-    if (!engine) return XR_INVALID_ARGUMENT;
+vh_result VH_CALL vh_engine_recover(vh_engine* engine) {
+    if (!engine) return VH_INVALID_ARGUMENT;
     std::error_code ec;
     const auto transactions = engine->cache_root / L"transactions";
-    if (!fs::exists(transactions)) return XR_OK;
+    if (!fs::exists(transactions)) return VH_OK;
     for (const auto& item : fs::directory_iterator(transactions, ec)) {
         const auto journal_path = item.path() / L"transaction.json";
         std::ifstream input(journal_path, std::ios::binary);
         const std::string journal((std::istreambuf_iterator<char>(input)), {});
         const auto package_id = json_string(journal, "packageId");
-        if (xirepo::is_safe_package_id(package_id)) {
+        if (vanahub::is_safe_package_id(package_id)) {
             const auto target = engine->install_root / widen(package_id);
             const auto backup = item.path() / L"backup";
             if (!fs::exists(target) && fs::exists(backup)) fs::rename(backup, target, ec);
         }
         if (!ec) fs::remove_all(item.path(), ec);
-        if (ec) return XR_FILESYSTEM_ERROR;
+        if (ec) return VH_FILESYSTEM_ERROR;
     }
-    return ec ? XR_FILESYSTEM_ERROR : XR_OK;
+    return ec ? VH_FILESYSTEM_ERROR : VH_OK;
 }
 
-xr_job_id XR_CALL xr_job_start(xr_engine* engine, const char* request_json) {
+vh_job_id VH_CALL vh_job_start(vh_engine* engine, const char* request_json) {
     if (!engine || !request_json || engine->stopping.load()) return 0;
     auto current = std::make_shared<job>();
     current->id = engine->next_id.fetch_add(1);
@@ -637,22 +637,22 @@ xr_job_id XR_CALL xr_job_start(xr_engine* engine, const char* request_json) {
     return current->id;
 }
 
-xr_result XR_CALL xr_job_poll(xr_engine* engine, xr_job_id id, char* buffer, uint32_t capacity, uint32_t* required) {
-    if (!engine || !required) return XR_INVALID_ARGUMENT;
+vh_result VH_CALL vh_job_poll(vh_engine* engine, vh_job_id id, char* buffer, uint32_t capacity, uint32_t* required) {
+    if (!engine || !required) return VH_INVALID_ARGUMENT;
     std::shared_ptr<job> current;
-    { std::scoped_lock lock(engine->jobs_mutex); const auto it = engine->jobs.find(id); if (it == engine->jobs.end()) return XR_NOT_FOUND; current = it->second; }
+    { std::scoped_lock lock(engine->jobs_mutex); const auto it = engine->jobs.find(id); if (it == engine->jobs.end()) return VH_NOT_FOUND; current = it->second; }
     const auto status = current->status(); *required = static_cast<uint32_t>(status.size() + 1);
-    if (!buffer || capacity < *required) return XR_BUFFER_TOO_SMALL;
-    memcpy(buffer, status.c_str(), status.size() + 1); return XR_OK;
+    if (!buffer || capacity < *required) return VH_BUFFER_TOO_SMALL;
+    memcpy(buffer, status.c_str(), status.size() + 1); return VH_OK;
 }
 
-xr_result XR_CALL xr_job_cancel(xr_engine* engine, xr_job_id id) {
-    if (!engine) return XR_INVALID_ARGUMENT;
+vh_result VH_CALL vh_job_cancel(vh_engine* engine, vh_job_id id) {
+    if (!engine) return VH_INVALID_ARGUMENT;
     std::scoped_lock lock(engine->jobs_mutex); const auto it = engine->jobs.find(id);
-    if (it == engine->jobs.end()) return XR_NOT_FOUND; it->second->cancel = true; return XR_OK;
+    if (it == engine->jobs.end()) return VH_NOT_FOUND; it->second->cancel = true; return VH_OK;
 }
 
-void XR_CALL xr_job_release(xr_engine* engine, xr_job_id id) {
+void VH_CALL vh_job_release(vh_engine* engine, vh_job_id id) {
     if (!engine) return;
     std::shared_ptr<job> current;
     { std::scoped_lock lock(engine->jobs_mutex); const auto it = engine->jobs.find(id); if (it == engine->jobs.end()) return; current = it->second; }
@@ -660,7 +660,7 @@ void XR_CALL xr_job_release(xr_engine* engine, xr_job_id id) {
     std::scoped_lock lock(engine->jobs_mutex); engine->jobs.erase(id);
 }
 
-void XR_CALL xr_engine_destroy(xr_engine* engine) {
+void VH_CALL vh_engine_destroy(vh_engine* engine) {
     if (!engine) return; engine->stopping = true;
     std::vector<std::shared_ptr<job>> jobs;
     { std::scoped_lock lock(engine->jobs_mutex); for (auto& [_, value] : engine->jobs) { value->cancel = true; jobs.push_back(value); } }

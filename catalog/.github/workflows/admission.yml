@@ -26,14 +26,14 @@ jobs:
       - name: Obtain and constrain changed manifest as data
         env:
           GH_TOKEN: ${{ github.token }}
-          XR_REPOSITORY: ${{ github.repository }}
-          XR_PR: ${{ github.event.pull_request.number }}
-          XR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          VH_REPOSITORY: ${{ github.repository }}
+          VH_PR: ${{ github.event.pull_request.number }}
+          VH_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         shell: bash
         run: |
           set -euo pipefail
-          gh api --paginate "repos/${XR_REPOSITORY}/pulls/${XR_PR}/files" > changed.json
-          python3 product/catalog/scripts/extract_pr_manifest.py changed.json "$XR_REPOSITORY" "$XR_HEAD_SHA" manifest.json
+          gh api --paginate "repos/${VH_REPOSITORY}/pulls/${VH_PR}/files" > changed.json
+          python3 product/catalog/scripts/extract_pr_manifest.py changed.json "$VH_REPOSITORY" "$VH_HEAD_SHA" manifest.json
       - name: Verify and scan
         id: scan
         uses: ./product/.github/actions/catalog-scan
@@ -55,6 +55,6 @@ jobs:
       - name: Enable protected auto-merge
         env:
           GH_TOKEN: ${{ github.token }}
-          XR_REPOSITORY: ${{ github.repository }}
-          XR_PR: ${{ github.event.pull_request.number }}
-        run: gh pr merge "$XR_PR" --repo "$XR_REPOSITORY" --auto --squash
+          VH_REPOSITORY: ${{ github.repository }}
+          VH_PR: ${{ github.event.pull_request.number }}
+        run: gh pr merge "$VH_PR" --repo "$VH_REPOSITORY" --auto --squash

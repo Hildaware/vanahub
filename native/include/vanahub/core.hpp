@@ -6,7 +6,7 @@
 #include <string_view>
 #include <vector>
 
-namespace xirepo {
+namespace vanahub {
 
 enum class severity { warning, error };
 
@@ -34,4 +34,4 @@ std::string ascii_casefold(std::string_view value);
 std::vector<finding> scan_lua(std::string_view source, std::string_view path);
 std::string json_escape(std::string_view value);
 
-} // namespace xirepo
+} // namespace vanahub

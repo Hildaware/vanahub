@@ -1,8 +1,8 @@
-# Ashita Addon Delivery System — Master Plan
+# VanaHub — Master Plan
 
 ## Product
 
-Build a Lua/ImGui package-browser frontend, a Win32/x86 native worker DLL, and
+Build VanaHub as a Lua/ImGui package-browser frontend, a Win32/x86 native worker DLL, and
 a separate signed public catalog with automated admission. V1 installs stable
 Ashita v4 Lua addons only. Downloads and updates are always user initiated.
 

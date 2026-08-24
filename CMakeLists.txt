@@ -1,20 +1,20 @@
 cmake_minimum_required(VERSION 3.24)
-project(xirepo VERSION 0.1.0 LANGUAGES C CXX)
+project(vanahub VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-option(XR_BUILD_ENGINE "Build the Win32 x86 package engine DLL" ${WIN32})
-option(XR_BUILD_TESTS "Build native tests" ON)
+option(VH_BUILD_ENGINE "Build the Win32 x86 package engine DLL" ${WIN32})
+option(VH_BUILD_TESTS "Build native tests" ON)
 
-add_library(xirepo_core STATIC
+add_library(vanahub_core STATIC
     native/src/core.cpp
 )
-target_include_directories(xirepo_core PUBLIC native/include)
-target_compile_features(xirepo_core PUBLIC cxx_std_20)
+target_include_directories(vanahub_core PUBLIC native/include)
+target_compile_features(vanahub_core PUBLIC cxx_std_20)
 
-if(XR_BUILD_ENGINE)
+if(VH_BUILD_ENGINE)
     if(NOT WIN32)
         message(FATAL_ERROR "The package engine targets Win32 only")
     endif()
@@ -58,45 +58,45 @@ if(XR_BUILD_ENGINE)
         "${monocypher_SOURCE_DIR}/src"
         "${monocypher_SOURCE_DIR}/src/optional")
 
-    add_library(xirepo_engine SHARED native/src/engine.cpp native/exports.def)
-    target_include_directories(xirepo_engine PRIVATE native/include ${minizip_ng_SOURCE_DIR})
-    target_link_libraries(xirepo_engine PRIVATE xirepo_core MINIZIP::minizip monocypher winhttp bcrypt ws2_32)
-    target_compile_definitions(xirepo_engine PRIVATE XR_ENGINE_BUILD WIN32_LEAN_AND_MEAN NOMINMAX)
-    set_target_properties(xirepo_engine PROPERTIES OUTPUT_NAME "xirepo_engine" PREFIX "")
+    add_library(vanahub_engine SHARED native/src/engine.cpp native/exports.def)
+    target_include_directories(vanahub_engine PRIVATE native/include ${minizip_ng_SOURCE_DIR})
+    target_link_libraries(vanahub_engine PRIVATE vanahub_core MINIZIP::minizip monocypher winhttp bcrypt ws2_32)
+    target_compile_definitions(vanahub_engine PRIVATE VH_ENGINE_BUILD WIN32_LEAN_AND_MEAN NOMINMAX)
+    set_target_properties(vanahub_engine PROPERTIES OUTPUT_NAME "vanahub_engine" PREFIX "")
     if(MINGW)
-        target_link_options(xirepo_engine PRIVATE -static -static-libgcc -static-libstdc++ -Wl,--kill-at)
-        add_custom_command(TARGET xirepo_engine POST_BUILD
-            COMMAND ${CMAKE_STRIP} "$<TARGET_FILE:xirepo_engine>"
+        target_link_options(vanahub_engine PRIVATE -static -static-libgcc -static-libstdc++ -Wl,--kill-at)
+        add_custom_command(TARGET vanahub_engine POST_BUILD
+            COMMAND ${CMAKE_STRIP} "$<TARGET_FILE:vanahub_engine>"
             COMMENT "Stripping Win32 release symbols")
     endif()
 
-    set(XR_PACKAGE_DIR "${CMAKE_BINARY_DIR}/package/addons/xirepo")
-    add_custom_target(xirepo_package
+    set(VH_PACKAGE_DIR "${CMAKE_BINARY_DIR}/package/addons/vanahub")
+    add_custom_target(vanahub_package
         COMMAND ${CMAKE_COMMAND} -E rm -rf "${CMAKE_BINARY_DIR}/package"
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${XR_PACKAGE_DIR}"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/addon/xirepo" "${XR_PACKAGE_DIR}"
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${XR_PACKAGE_DIR}/versions/0.1.0/bin"
-        COMMAND ${CMAKE_COMMAND} -E rm -f "${XR_PACKAGE_DIR}/versions/0.1.0/bin/.gitkeep"
-        COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:xirepo_engine>" "${XR_PACKAGE_DIR}/versions/0.1.0/bin/xirepo_engine.dll"
-        DEPENDS xirepo_engine
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${VH_PACKAGE_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/addon/vanahub" "${VH_PACKAGE_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${VH_PACKAGE_DIR}/versions/0.1.0/bin"
+        COMMAND ${CMAKE_COMMAND} -E rm -f "${VH_PACKAGE_DIR}/versions/0.1.0/bin/.gitkeep"
+        COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:vanahub_engine>" "${VH_PACKAGE_DIR}/versions/0.1.0/bin/vanahub_engine.dll"
+        DEPENDS vanahub_engine
         COMMENT "Assembling the Ashita addon package")
 endif()
 
-if(XR_BUILD_TESTS)
+if(VH_BUILD_TESTS)
     enable_testing()
-    add_executable(xirepo_core_tests tests/native/core_tests.cpp)
-    target_link_libraries(xirepo_core_tests PRIVATE xirepo_core)
+    add_executable(vanahub_core_tests tests/native/core_tests.cpp)
+    target_link_libraries(vanahub_core_tests PRIVATE vanahub_core)
     if(MINGW)
-        target_link_options(xirepo_core_tests PRIVATE -static -static-libgcc -static-libstdc++)
+        target_link_options(vanahub_core_tests PRIVATE -static -static-libgcc -static-libstdc++)
     endif()
-    add_test(NAME xirepo_core_tests COMMAND xirepo_core_tests)
-    if(XR_BUILD_ENGINE)
-        add_executable(xirepo_engine_tests tests/native/engine_tests.cpp)
-        target_include_directories(xirepo_engine_tests PRIVATE native/include)
-        target_link_libraries(xirepo_engine_tests PRIVATE xirepo_engine)
+    add_test(NAME vanahub_core_tests COMMAND vanahub_core_tests)
+    if(VH_BUILD_ENGINE)
+        add_executable(vanahub_engine_tests tests/native/engine_tests.cpp)
+        target_include_directories(vanahub_engine_tests PRIVATE native/include)
+        target_link_libraries(vanahub_engine_tests PRIVATE vanahub_engine)
         if(MINGW)
-            target_link_options(xirepo_engine_tests PRIVATE -static -static-libgcc -static-libstdc++)
+            target_link_options(vanahub_engine_tests PRIVATE -static -static-libgcc -static-libstdc++)
         endif()
-        add_test(NAME xirepo_engine_tests COMMAND xirepo_engine_tests)
+        add_test(NAME vanahub_engine_tests COMMAND vanahub_engine_tests)
     endif()
 endif()

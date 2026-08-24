@@ -43,8 +43,19 @@ class CatalogScanTests(unittest.TestCase):
             return catalog_scan.scan(manifest_path, archive)
 
     def test_accepts_restricted_addon(self):
-        report = self.run_scan({"sample/sample.lua": "local imgui = require('imgui')\nreturn true\n"})
+        report = self.run_scan(
+            {"sample/sample.lua": "local imgui = require('imgui')\nreturn true\n"},
+            screenshots=["https://raw.githubusercontent.com/author/sample/main/screenshots/main.png"],
+        )
         self.assertTrue(report["accepted"], report["findings"])
+
+    def test_rejects_invalid_screenshot_urls(self):
+        report = self.run_scan(
+            {"sample/sample.lua": "return true"},
+            screenshots=["http://example.com/insecure.png", "http://example.com/insecure.png"],
+        )
+        self.assertFalse(report["accepted"])
+        self.assertIn("manifest.screenshots", {f["rule_id"] for f in report["findings"]})
 
     def test_rejects_network(self):
         report = self.run_scan({"sample/sample.lua": "local socket = require('socket')\n"})
@@ -76,8 +87,8 @@ class CatalogScanTests(unittest.TestCase):
 
     def test_only_manager_package_may_ship_its_engine_dll(self):
         accepted = self.run_scan(
-            {"xirepo/xirepo.lua": "return true", "xirepo/bin/xirepo_engine.dll": "PE"},
-            id="xirepo", archiveRoot="xirepo", entrypoint="xirepo.lua",
+            {"vanahub/vanahub.lua": "return true", "vanahub/bin/vanahub_engine.dll": "PE"},
+            id="vanahub", archiveRoot="vanahub", entrypoint="vanahub.lua",
         )
         self.assertTrue(accepted["accepted"], accepted["findings"])
         rejected = self.run_scan(

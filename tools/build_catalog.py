@@ -22,7 +22,7 @@ def main() -> int:
     parser.add_argument("--repository-id", default="builtin")
     parser.add_argument("--repository-name", default="Built-in screened repository")
     parser.add_argument("--revocations", type=Path)
-    parser.add_argument("--signing-key-env", default="XIREPO_ED25519_PRIVATE_KEY")
+    parser.add_argument("--signing-key-env", default="VANAHUB_ED25519_PRIVATE_KEY")
     parser.add_argument("--key-id", default="catalog-2026-01")
     args = parser.parse_args()
 

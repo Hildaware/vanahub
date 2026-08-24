@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://example.invalid/xirepo/package.schema.json",
+  "$id": "https://example.invalid/vanahub/package.schema.json",
   "title": "Ashita addon package manifest",
   "type": "object",
   "additionalProperties": false,
@@ -28,6 +28,10 @@
     "archiveRoot": { "type": "string", "maxLength": 200 },
     "entrypoint": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+\\.lua$" },
     "iconUrl": { "type": "string", "format": "uri" },
+    "screenshots": {
+      "type": "array", "minItems": 1, "maxItems": 10, "uniqueItems": true,
+      "items": { "type": "string", "format": "uri", "pattern": "^https://", "maxLength": 2048 }
+    },
     "declaredCapabilities": {
       "type": "array", "uniqueItems": true,
       "items": { "type": "string", "enum": ["ui", "game-state-read", "packet-read", "chat-output", "command-handler", "settings-write", "bundled-file-read"] }

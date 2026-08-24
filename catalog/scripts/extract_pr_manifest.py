@@ -17,7 +17,7 @@ if len(paths) != 1 or not re.fullmatch(r"packages/[a-z0-9][a-z0-9._-]{1,63}/mani
 token = os.environ.get("GH_TOKEN", "")
 request = urllib.request.Request(
     f"https://api.github.com/repos/{repository}/contents/{paths[0]}?ref={ref}",
-    headers={"Accept": "application/vnd.github+json", "Authorization": f"Bearer {token}", "User-Agent": "xirepo-admission/1"},
+    headers={"Accept": "application/vnd.github+json", "Authorization": f"Bearer {token}", "User-Agent": "vanahub-admission/1"},
 )
 with urllib.request.urlopen(request, timeout=20) as response:
     content = json.load(response)["content"]

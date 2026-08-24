@@ -47,7 +47,7 @@ def semver_greater(candidate: str, previous: str) -> bool:
 
 
 def github_json(url: str) -> dict:
-    headers = {"Accept": "application/vnd.github+json", "User-Agent": "xirepo-admission/1"}
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "vanahub-admission/1"}
     token = os.environ.get("GITHUB_TOKEN")
     if token:
         headers["Authorization"] = f"Bearer {token}"
@@ -81,10 +81,10 @@ def main() -> int:
                 raise SystemExit("updates must increase the package SemVer")
     metadata = github_json(f"https://api.github.com/repos/{owner}/{repository}")
     default_branch = metadata["default_branch"]
-    authorization_url = f"https://raw.githubusercontent.com/{owner}/{repository}/{default_branch}/.xirepo.json"
+    authorization_url = f"https://raw.githubusercontent.com/{owner}/{repository}/{default_branch}/.vanahub.json"
     authorization = github_json(authorization_url)
     if authorization.get("schemaVersion") != 1:
-        raise SystemExit("source .xirepo.json has an unsupported schema")
+        raise SystemExit("source .vanahub.json has an unsupported schema")
     package = authorization.get("packages", {}).get(manifest.get("id"))
     if not isinstance(package, dict):
         raise SystemExit("source repository does not authorize this package id")

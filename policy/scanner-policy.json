@@ -8,7 +8,7 @@
     "compressionRatio": 200
   },
   "allowedExtensions": [".lua", ".json", ".ini", ".xml", ".txt", ".md", ".png", ".jpg", ".jpeg", ".dds", ".wav"],
-  "privilegedPackageIds": ["xirepo"],
+  "privilegedPackageIds": ["vanahub"],
   "allowedModules": ["common", "chat", "imgui", "settings", "json", "ffxi.enums", "ffxi.recast", "ffxi.targets", "ffxi.vanatime", "ffxi.weather"],
   "blockedSymbols": [
     "ffi", "socket", "ssl.https", "os.execute", "io.popen", "package.loadlib",

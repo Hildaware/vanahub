@@ -22,7 +22,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - run: cmake -S . -B build -DXR_BUILD_ENGINE=OFF
+      - run: cmake -S . -B build -DVH_BUILD_ENGINE=OFF
       - run: cmake --build build --config Release
       - run: ctest --test-dir build -C Release --output-on-failure
 
@@ -30,6 +30,6 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - run: cmake -S . -B build-win32 -A Win32 -DXR_BUILD_ENGINE=ON
+      - run: cmake -S . -B build-win32 -A Win32 -DVH_BUILD_ENGINE=ON
       - run: cmake --build build-win32 --config Release
       - run: ctest --test-dir build-win32 -C Release --output-on-failure

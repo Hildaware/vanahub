@@ -1,4 +1,4 @@
-#include "xirepo/core.hpp"
+#include "vanahub/core.hpp"
 
 #include <algorithm>
 #include <array>
@@ -6,7 +6,7 @@
 #include <regex>
 #include <set>
 
-namespace xirepo {
+namespace vanahub {
 namespace {
 
 constexpr std::array<std::string_view, 25> blocked_symbols{
@@ -143,4 +143,4 @@ std::string json_escape(std::string_view value) {
     return output;
 }
 
-} // namespace xirepo
+} // namespace vanahub

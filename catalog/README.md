@@ -1,4 +1,4 @@
-# Public catalog repository template
+# VanaHub public catalog repository template
 
 This directory is copied into a separate hardened repository. The product
 source and public package-submission history intentionally do not share a Git
@@ -9,7 +9,7 @@ Before enabling workflows:
 1. Replace `OWNER/PRODUCT_REPOSITORY` and `PINNED_PRODUCT_COMMIT` with the
    product repository and an immutable reviewed commit.
 2. Configure branch protection and allow auto-merge only after `admission`.
-3. Add `XIREPO_ED25519_PRIVATE_KEY` as a protected Actions secret containing a
+3. Add `VANAHUB_ED25519_PRIVATE_KEY` as a protected Actions secret containing a
    base64-encoded 32-byte Ed25519 seed.
 4. Replace the placeholder public key in the product and publish a client
    release before signing production indexes.

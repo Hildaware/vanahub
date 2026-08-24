@@ -1,7 +1,7 @@
-addon.name = 'xirepo';
-addon.author = 'xi-repo contributors';
+addon.name = 'vanahub';
+addon.author = 'VanaHub contributors';
 addon.version = '0.1.0';
-addon.desc = 'Browses and installs screened Ashita v4 addons.';
+addon.desc = 'VanaHub browses and installs screened Ashita v4 addons.';
 addon.link = 'https://github.com/';
 
 require 'common';
@@ -34,7 +34,7 @@ if (pending ~= nil and pending:match('^[0-9A-Za-z._-]+$') ~= nil) then
 end
 
 local active = read_text(active_path) or addon.version;
-assert(active:match('^[0-9A-Za-z._-]+$') ~= nil, 'Invalid active xirepo version.');
+assert(active:match('^[0-9A-Za-z._-]+$') ~= nil, 'Invalid active VanaHub version.');
 addon.active_version = active;
 local version_root = addon.path .. 'versions\\' .. active .. '\\';
 package.path = version_root .. '?.lua;' .. version_root .. '?\\init.lua;' .. package.path;

@@ -1,10 +1,10 @@
-LIBRARY xirepo_engine
+LIBRARY vanahub_engine
 EXPORTS
-    xr_abi_version
-    xr_engine_create
-    xr_engine_recover
-    xr_job_start
-    xr_job_poll
-    xr_job_cancel
-    xr_job_release
-    xr_engine_destroy
+    vh_abi_version
+    vh_engine_create
+    vh_engine_recover
+    vh_job_start
+    vh_job_poll
+    vh_job_cancel
+    vh_job_release
+    vh_engine_destroy

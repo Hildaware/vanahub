@@ -24,17 +24,17 @@ runs:
     - name: Verify source authorization
       shell: bash
       env:
-        XR_MANIFEST: ${{ inputs.manifest }}
-        XR_ACTOR: ${{ inputs.actor }}
-        XR_PREVIOUS_ROOT: ${{ inputs['previous-root'] }}
+        VH_MANIFEST: ${{ inputs.manifest }}
+        VH_ACTOR: ${{ inputs.actor }}
+        VH_PREVIOUS_ROOT: ${{ inputs['previous-root'] }}
         GITHUB_TOKEN: ${{ inputs.token }}
       run: |
-        args=("$GITHUB_ACTION_PATH/../../../tools/verify_submission.py" "$XR_MANIFEST" --actor "$XR_ACTOR")
-        if [[ -n "$XR_PREVIOUS_ROOT" ]]; then args+=(--previous-root "$XR_PREVIOUS_ROOT"); fi
+        args=("$GITHUB_ACTION_PATH/../../../tools/verify_submission.py" "$VH_MANIFEST" --actor "$VH_ACTOR")
+        if [[ -n "$VH_PREVIOUS_ROOT" ]]; then args+=(--previous-root "$VH_PREVIOUS_ROOT"); fi
         python3 "${args[@]}"
     - name: Scan artifact
       shell: bash
       env:
-        XR_MANIFEST: ${{ inputs.manifest }}
-        XR_OUTPUT: ${{ inputs.output }}
-      run: python3 "$GITHUB_ACTION_PATH/../../../tools/catalog_scan.py" "$XR_MANIFEST" --output "$XR_OUTPUT"
+        VH_MANIFEST: ${{ inputs.manifest }}
+        VH_OUTPUT: ${{ inputs.output }}
+      run: python3 "$GITHUB_ACTION_PATH/../../../tools/catalog_scan.py" "$VH_MANIFEST" --output "$VH_OUTPUT"

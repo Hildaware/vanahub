@@ -62,7 +62,7 @@ def validate_manifest(manifest: dict) -> list[Finding]:
         "compressedSize", "archiveRoot", "entrypoint", "declaredCapabilities",
     }
     missing = sorted(required - manifest.keys())
-    optional = {"iconUrl"}
+    optional = {"iconUrl", "screenshots"}
     unknown = sorted(manifest.keys() - required - optional)
     if unknown:
         findings.append(Finding("manifest.unknown-fields", "error", f"Unknown fields: {', '.join(unknown)}"))
@@ -85,6 +85,22 @@ def validate_manifest(manifest: dict) -> list[Finding]:
     for ok, rule, message in checks:
         if not ok:
             findings.append(Finding(rule, "error", message))
+    if "screenshots" in manifest:
+        screenshots = manifest["screenshots"]
+        valid_screenshots = isinstance(screenshots, list) and 1 <= len(screenshots) <= 10
+        if valid_screenshots:
+            valid_screenshots = len(screenshots) == len(set(screenshots)) if all(isinstance(url, str) for url in screenshots) else False
+        if valid_screenshots:
+            for url in screenshots:
+                parsed = urllib.parse.urlparse(url)
+                if len(url) > 2048 or parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+                    valid_screenshots = False
+                    break
+        if not valid_screenshots:
+            findings.append(Finding(
+                "manifest.screenshots", "error",
+                "screenshots must contain 1 to 10 unique HTTPS URLs",
+            ))
     if isinstance(manifest.get("sourceUrl"), str) and isinstance(manifest.get("downloadUrl"), str):
         source = urllib.parse.urlparse(manifest["sourceUrl"]).path.strip("/").split("/")
         download = urllib.parse.urlparse(manifest["downloadUrl"]).path.strip("/").split("/")
@@ -197,7 +213,7 @@ def scan_archive(archive: Path, manifest: dict, policy: dict) -> tuple[list[Find
                 if "/" not in relative and relative.casefold() == manifest.get("entrypoint", "").casefold():
                     entrypoint_found = True
                 suffix = Path(relative).suffix.lower()
-                engine_binary = manifest.get("id") in policy.get("privilegedPackageIds", []) and relative.casefold() == "bin/xirepo_engine.dll"
+                engine_binary = manifest.get("id") in policy.get("privilegedPackageIds", []) and relative.casefold() == "bin/vanahub_engine.dll"
                 if suffix not in policy["allowedExtensions"] and not engine_binary:
                     findings.append(Finding("zip.file-type", "error", f"File type {suffix or '<none>'} is prohibited", normalized))
                 files.append(relative)
@@ -228,7 +244,7 @@ class RestrictedRedirect(urllib.request.HTTPRedirectHandler):
 
 def download(url: str, destination: Path, maximum: int) -> tuple[str, int]:
     opener = urllib.request.build_opener(RestrictedRedirect())
-    request = urllib.request.Request(url, headers={"User-Agent": "xirepo-catalog-scanner/1"})
+    request = urllib.request.Request(url, headers={"User-Agent": "vanahub-catalog-scanner/1"})
     digest = hashlib.sha256()
     size = 0
     with opener.open(request, timeout=30) as response, destination.open("wb") as output:
@@ -250,7 +266,7 @@ def scan(manifest_path: Path, archive_path: Path | None = None) -> dict:
     temporary: tempfile.TemporaryDirectory[str] | None = None
     try:
         if archive_path is None and not findings:
-            temporary = tempfile.TemporaryDirectory(prefix="xirepo-scan-")
+            temporary = tempfile.TemporaryDirectory(prefix="vanahub-scan-")
             archive_path = Path(temporary.name) / "package.zip"
             try:
                 digest, size = download(manifest["downloadUrl"], archive_path, policy["limits"]["compressedBytes"])

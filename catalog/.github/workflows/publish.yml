@@ -27,7 +27,7 @@ jobs:
         run: python3 -m pip install --disable-pip-version-check -r product/catalog/requirements-signing.txt
       - name: Re-scan and build index
         env:
-          XIREPO_ED25519_PRIVATE_KEY: ${{ secrets.XIREPO_ED25519_PRIVATE_KEY }}
+          VANAHUB_ED25519_PRIVATE_KEY: ${{ secrets.VANAHUB_ED25519_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           shopt -s nullglob

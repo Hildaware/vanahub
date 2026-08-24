@@ -13,5 +13,8 @@
   "compressedSize": 1,
   "archiveRoot": "example-addon",
   "entrypoint": "example-addon.lua",
+  "screenshots": [
+    "https://raw.githubusercontent.com/example/example-addon/main/screenshots/browser.png"
+  ],
   "declaredCapabilities": ["ui"]
 }

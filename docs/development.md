@@ -1,4 +1,4 @@
-# Development
+# VanaHub development
 
 ## Requirements
 
@@ -13,7 +13,7 @@
 ## Configure native tests
 
 ```sh
-cmake -S . -B build/native -G Ninja -DXR_BUILD_ENGINE=OFF
+cmake -S . -B build/native -G Ninja -DVH_BUILD_ENGINE=OFF
 cmake --build build/native
 ctest --test-dir build/native --output-on-failure
 ```
@@ -23,11 +23,11 @@ ctest --test-dir build/native --output-on-failure
 ```sh
 cmake -S . -B build/win32 -G Ninja \
   --toolchain cmake/toolchains/windows-x86-mingw.cmake
-cmake --build build/win32 --target xirepo_package
+cmake --build build/win32 --target vanahub_package
 ```
 
-The deployable tree is written to `build/win32/package/addons/xirepo`.
-Configure `addon/xirepo/versions/0.1.0/builtin.lua` only after the separate
+The deployable tree is written to `build/win32/package/addons/vanahub`.
+Configure `addon/vanahub/versions/0.1.0/builtin.lua` only after the separate
 catalog repository and its Ed25519 key have been created.
 
 ## Build and deploy to HorizonXI
@@ -39,7 +39,7 @@ make deploy-local
 ```
 
 This builds the Release package and synchronizes it to
-`/Users/bferrari/Games/FFXI/HorizonXI/addons/xirepo`. The destination is made
+`/Users/bferrari/Games/FFXI/HorizonXI/addons/vanahub`. The destination is made
 to exactly match the generated package, so unload the addon before deploying.
 Before building, the script audits the frontend's required modules, ImGui
 methods, and flag constants against that installation's bundled Ashita v4 SDK.

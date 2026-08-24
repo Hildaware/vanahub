@@ -1,4 +1,4 @@
-# Threat model
+# VanaHub threat model
 
 ## Protected assets
 
@@ -37,5 +37,5 @@ blocks that cannot be overridden.
   injection/modification, and self-installation.
 
 The package manager's own signed release is the sole native-code exception:
-package id `xirepo` may contain exactly `bin/xirepo_engine.dll`. The client
+package id `vanahub` may contain exactly `bin/vanahub_engine.dll`. The client
 stages it in a versioned directory and activates it only on the next launch.
