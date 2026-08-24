@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import json
 import sys
@@ -7,11 +8,18 @@ import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "catalog" / "scripts"))
 import catalog_scan
+import extract_pr_manifest
 import verify_submission
 
 
 class CatalogScanTests(unittest.TestCase):
+    def test_decodes_line_wrapped_github_content(self):
+        document = b'{"schemaVersion":1,"id":"sample"}\n'
+        encoded = base64.encodebytes(document).decode("ascii")
+        self.assertEqual(extract_pr_manifest.decode_github_content(encoded), document)
+
     def manifest(self, digest: str, size: int, **overrides):
         value = {
             "schemaVersion": 1, "id": "sample", "name": "Sample",
