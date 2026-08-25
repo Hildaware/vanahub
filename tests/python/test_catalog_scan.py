@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import json
 import sys
@@ -8,6 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 import catalog_scan
+import build_catalog
 import verify_submission
 
 
@@ -62,6 +64,30 @@ class CatalogScanTests(unittest.TestCase):
         self.assertFalse(report["accepted"])
         self.assertIn("lua.blocked-symbol", {f["rule_id"] for f in report["findings"]})
 
+    def test_rejects_aliases_of_dangerous_standard_libraries(self):
+        report = self.run_scan({"sample/sample.lua": "local runner = os\nrunner.execute('calc')\n"})
+        self.assertFalse(report["accepted"])
+        self.assertIn("lua.blocked-symbol", {f["rule_id"] for f in report["findings"]})
+
+    def test_rejects_dynamic_environment_recovery(self):
+        report = self.run_scan({
+            "sample/sample.lua": "return getfenv(0)[string.char(111, 115)]\n",
+        })
+        self.assertFalse(report["accepted"])
+        self.assertIn("lua.blocked-symbol", {f["rule_id"] for f in report["findings"]})
+
+    def test_rejects_unapproved_unbundled_module(self):
+        report = self.run_scan({"sample/sample.lua": "local helper = require('not_bundled')\n"})
+        self.assertFalse(report["accepted"])
+        self.assertIn("lua.disallowed-module", {f["rule_id"] for f in report["findings"]})
+
+    def test_accepts_bundled_local_module(self):
+        report = self.run_scan({
+            "sample/sample.lua": "local helper = require('helper')\nreturn helper\n",
+            "sample/helper.lua": "return {}\n",
+        })
+        self.assertTrue(report["accepted"], report["findings"])
+
     def test_rejects_traversal(self):
         report = self.run_scan({"sample/sample.lua": "return true", "../escape.lua": "return false"})
         self.assertFalse(report["accepted"])
@@ -89,6 +115,8 @@ class CatalogScanTests(unittest.TestCase):
         accepted = self.run_scan(
             {"vanahub/vanahub.lua": "return true", "vanahub/bin/vanahub_engine.dll": "PE"},
             id="vanahub", archiveRoot="vanahub", entrypoint="vanahub.lua",
+            sourceUrl="https://github.com/Hildaware/vanahub",
+            downloadUrl="https://github.com/Hildaware/vanahub/releases/download/v1.0.0/vanahub.zip",
         )
         self.assertTrue(accepted["accepted"], accepted["findings"])
         rejected = self.run_scan(
@@ -96,6 +124,14 @@ class CatalogScanTests(unittest.TestCase):
         )
         self.assertFalse(rejected["accepted"])
         self.assertIn("zip.file-type", {f["rule_id"] for f in rejected["findings"]})
+
+    def test_privileged_package_id_is_bound_to_official_source(self):
+        report = self.run_scan(
+            {"vanahub/vanahub.lua": "return true", "vanahub/bin/vanahub_engine.dll": "PE"},
+            id="vanahub", archiveRoot="vanahub", entrypoint="vanahub.lua",
+        )
+        self.assertFalse(report["accepted"])
+        self.assertIn("manifest.privileged-source", {f["rule_id"] for f in report["findings"]})
 
     def test_runtime_policy_tracks_catalog_policy(self):
         root = Path(__file__).resolve().parents[2]
@@ -111,6 +147,14 @@ class CatalogScanTests(unittest.TestCase):
         self.assertTrue(verify_submission.semver_greater("1.0.1", "1.0.0"))
         self.assertFalse(verify_submission.semver_greater("1.0.0-rc.1", "1.0.0"))
         self.assertFalse(verify_submission.semver_greater("1.0.0", "1.0.0"))
+
+    def test_dependency_free_ed25519_signing(self):
+        seed = base64.b64encode(bytes(range(32))).decode("ascii")
+        signature = build_catalog.sign_ed25519(b"test payload\n", seed)
+        self.assertEqual(
+            base64.b64encode(signature).decode("ascii"),
+            "WhCCTz6dcWzlYeiCVcMHyfUAqMh1CgCBANW44jvS6ow5svcGfpxgUOYHG4crrpMRp49Mm2tK4+N6VpZhdMvJDA==",
+        )
 
 
 if __name__ == "__main__":

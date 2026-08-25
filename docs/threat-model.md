@@ -20,12 +20,19 @@
 Catalog artifacts are always untrusted data. CI never imports, executes, builds,
 or tests submitted addon code. The client never installs directly from an
 archive: it downloads, hashes, scans, stages, validates, and then commits.
+Privileged package IDs are bound to explicit official source repositories; an
+author cannot claim the package manager ID to gain its native-engine exception.
 
 Static analysis cannot prove arbitrary Lua harmless. The built-in repository
 therefore accepts only a restricted, intentionally analyzable Lua profile.
 Custom repositories remain an explicit trust decision. Path traversal, unsafe
 archive structure, size abuse, hash mismatch, and signature failure are hard
 blocks that cannot be overridden.
+
+Catalog scanning runs without the signing key. The private Ed25519 seed is
+exposed only while signing an already-built index and is stored as a protected
+GitHub environment secret; the corresponding client public key is intentionally
+public.
 
 ## Built-in prohibited behavior
 

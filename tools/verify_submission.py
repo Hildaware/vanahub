@@ -14,6 +14,7 @@ from pathlib import Path
 SOURCE = re.compile(r"^https://github\.com/([^/]+)/([^/]+)/?$")
 RELEASE = re.compile(r"^https://github\.com/([^/]+)/([^/]+)/releases/download/[^/]+/[^/]+$")
 SEMVER = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$")
+PRIVILEGED_SOURCES = {"vanahub": "https://github.com/Hildaware/vanahub"}
 
 
 def semver_greater(candidate: str, previous: str) -> bool:
@@ -66,6 +67,9 @@ def main() -> int:
     if not match:
         raise SystemExit("sourceUrl must be a public GitHub repository")
     owner, repository = match.groups()
+    privileged_source = PRIVILEGED_SOURCES.get(manifest.get("id"))
+    if privileged_source and manifest.get("sourceUrl", "").rstrip("/").casefold() != privileged_source.casefold():
+        raise SystemExit("privileged package ID is reserved for its official source repository")
     release = RELEASE.fullmatch(manifest.get("downloadUrl", ""))
     if not release or tuple(part.casefold() for part in release.groups()) != (owner.casefold(), repository.casefold()):
         raise SystemExit("downloadUrl must be a GitHub Release asset from sourceUrl")

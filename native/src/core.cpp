@@ -9,9 +9,9 @@
 namespace vanahub {
 namespace {
 
-constexpr std::array<std::string_view, 25> blocked_symbols{
-    "ffi", "socket", "ssl.https", "os.execute", "io.popen", "package.loadlib",
-    "loadstring", "load", "dofile", "debug", "ashita.memory.write", "injectpacket",
+constexpr std::array<std::string_view, 33> blocked_symbols{
+    "ffi", "socket", "ssl.https", "os", "io", "package", "os.execute", "io.popen", "package.loadlib",
+    "loadstring", "load", "loadfile", "dofile", "getfenv", "setfenv", "_env", "string.dump", "debug", "ashita.memory.write", "injectpacket",
     "queuecommand", "createprocess", "shellexecute", "winexec", "loadlibrary",
     "regsetvalue", "urldownloadtofile", "winhttpopen", "internetopen",
     "deletefile", "removeDirectory", "virtualprotect", "writeprocessmemory"

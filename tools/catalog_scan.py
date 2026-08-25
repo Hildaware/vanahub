@@ -106,6 +106,9 @@ def validate_manifest(manifest: dict) -> list[Finding]:
         download = urllib.parse.urlparse(manifest["downloadUrl"]).path.strip("/").split("/")
         if len(source) >= 2 and len(download) >= 2 and [part.casefold() for part in source[:2]] != [part.casefold() for part in download[:2]]:
             findings.append(Finding("manifest.repository-mismatch", "error", "Release asset must belong to sourceUrl repository"))
+    privileged_source = load_policy().get("privilegedPackageSources", {}).get(manifest.get("id"))
+    if privileged_source and manifest.get("sourceUrl", "").rstrip("/").casefold() != privileged_source.rstrip("/").casefold():
+        findings.append(Finding("manifest.privileged-source", "error", "Privileged package id is reserved for its official source repository"))
     return findings
 
 
@@ -124,7 +127,7 @@ def normalized_zip_path(name: str) -> PurePosixPath:
     return path
 
 
-def lua_findings(text: str, path: str, policy: dict) -> list[Finding]:
+def lua_findings(text: str, path: str, policy: dict, local_modules: set[str] | None = None) -> list[Finding]:
     findings: list[Finding] = []
     blocked = {
         "ffi": "native-interop", "socket": "network", "ssl.https": "network",
@@ -157,12 +160,14 @@ def lua_findings(text: str, path: str, policy: dict) -> list[Finding]:
     if max((len(line) for line in text.splitlines()), default=0) > 4000:
         findings.append(Finding("lua.obfuscated-line", "error", "Source contains an excessively long line", path, capability="obfuscation"))
 
+    local_modules = local_modules or set()
     for module in literal_requires:
-        if module in policy["allowedModules"]:
+        if module in policy["allowedModules"] or module in local_modules:
             continue
-        # Local modules are allowed and resolved against other scanned Lua files.
         if not re.fullmatch(r"[A-Za-z0-9_.-]+", module):
             findings.append(Finding("lua.invalid-module", "error", f"Invalid or dynamic-looking module name: {module}", path))
+        else:
+            findings.append(Finding("lua.disallowed-module", "error", f"Module is neither policy-approved nor bundled locally: {module}", path))
     return findings
 
 
@@ -179,6 +184,19 @@ def scan_archive(archive: Path, manifest: dict, policy: dict) -> tuple[list[Find
     try:
         with zipfile.ZipFile(archive) as package:
             infos = package.infolist()
+            local_modules: set[str] = set()
+            for info in infos:
+                try:
+                    normalized = normalized_zip_path(info.filename.rstrip("/")).as_posix()
+                except ScanError:
+                    continue
+                if info.is_dir() or (prefix and not normalized.startswith(prefix)):
+                    continue
+                relative = normalized[len(prefix):] if prefix else normalized
+                if relative.lower().endswith(".lua"):
+                    module = relative[:-4].replace("/", ".")
+                    local_modules.add(module)
+                    local_modules.add(module.rsplit(".", 1)[-1])
             if len(infos) > limits["entries"]:
                 findings.append(Finding("zip.too-many-entries", "error", "Archive entry limit exceeded"))
             for info in infos:
@@ -223,7 +241,7 @@ def scan_archive(archive: Path, manifest: dict, policy: dict) -> tuple[list[Find
                     except (UnicodeDecodeError, RuntimeError, zipfile.BadZipFile):
                         findings.append(Finding("lua.encoding", "error", "Lua source must be valid UTF-8 and readable", normalized))
                     else:
-                        findings.extend(lua_findings(text, normalized, policy))
+                        findings.extend(lua_findings(text, normalized, policy, local_modules))
     except (OSError, zipfile.BadZipFile, zipfile.LargeZipFile) as exc:
         findings.append(Finding("zip.invalid", "error", f"Invalid ZIP: {exc}"))
 

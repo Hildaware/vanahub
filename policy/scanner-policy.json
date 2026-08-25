@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "limits": {
     "compressedBytes": 52428800,
     "expandedBytes": 209715200,
@@ -9,10 +9,13 @@
   },
   "allowedExtensions": [".lua", ".json", ".ini", ".xml", ".txt", ".md", ".png", ".jpg", ".jpeg", ".dds", ".wav"],
   "privilegedPackageIds": ["vanahub"],
+  "privilegedPackageSources": {
+    "vanahub": "https://github.com/Hildaware/vanahub"
+  },
   "allowedModules": ["common", "chat", "imgui", "settings", "json", "ffxi.enums", "ffxi.recast", "ffxi.targets", "ffxi.vanatime", "ffxi.weather"],
   "blockedSymbols": [
-    "ffi", "socket", "ssl.https", "os.execute", "io.popen", "package.loadlib",
-    "loadstring", "load", "dofile", "debug", "ashita.memory.write",
+    "ffi", "socket", "ssl.https", "os", "io", "package", "os.execute", "io.popen", "package.loadlib",
+    "loadstring", "load", "loadfile", "dofile", "getfenv", "setfenv", "_ENV", "string.dump", "debug", "ashita.memory.write",
     "InjectPacket", "QueueCommand", "CreateProcess", "ShellExecute", "WinExec",
     "LoadLibrary", "RegSetValue", "URLDownloadToFile"
   ]

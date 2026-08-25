@@ -25,6 +25,7 @@ int main() {
     expect(vanahub::scan_lua("local imgui = require('imgui')", "sample.lua").empty(), "safe Lua accepted");
     expect(vanahub::scan_lua("local preload = true", "sample.lua").empty(), "blocked names use identifier boundaries");
     expect(!vanahub::scan_lua("os.execute('bad')", "sample.lua").empty(), "process execution rejected");
+    expect(!vanahub::scan_lua("local runner = os; runner.execute('bad')", "sample.lua").empty(), "standard-library aliases rejected");
     expect(!vanahub::scan_lua("load('bad')", "sample.lua").empty(), "dynamic loading rejected");
     return 0;
 }
