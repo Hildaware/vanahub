@@ -95,6 +95,95 @@ bool verify_catalog_signature(const fs::path& index, const fs::path& detached,
     return true;
 }
 
+bool valid_sha256(const std::string& value) {
+    return value.size() == 64 && std::all_of(value.begin(), value.end(), [](unsigned char c) {
+        return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+    });
+}
+
+std::wstring widen(const std::string& value);
+std::string sha256_file(const fs::path& path);
+
+std::string read_small_text(const fs::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    std::string value((std::istreambuf_iterator<char>(input)), {});
+    while (!value.empty() && (value.back() == '\r' || value.back() == '\n')) value.pop_back();
+    return value;
+}
+
+bool activate_pointer(const fs::path& repository_root, const std::string& digest, std::string& error) {
+    const auto pointer = repository_root / L"current";
+    const auto partial = repository_root / L"current.part";
+    {
+        std::ofstream output(partial, std::ios::binary | std::ios::trunc);
+        output << digest << '\n';
+        if (!output.good()) { error = "Could not write repository cache pointer"; return false; }
+    }
+    if (!MoveFileExW(partial.c_str(), pointer.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        std::error_code ec; fs::remove(partial, ec);
+        error = "Could not activate repository cache pointer"; return false;
+    }
+    return true;
+}
+
+bool activate_signed_repository(const fs::path& repository_root, const fs::path& index_partial,
+                                const fs::path& signature_partial, const std::string& digest,
+                                std::string& activated_path, std::string& error) {
+    const auto previous = read_small_text(repository_root / L"current");
+    const auto generations = repository_root / L"generations";
+    const auto generation = generations / widen(digest);
+    std::error_code ec;
+    fs::create_directories(generations, ec);
+    if (ec) { error = "Could not create repository cache"; return false; }
+    fs::remove_all(generation, ec); ec.clear();
+    fs::create_directories(generation, ec);
+    if (ec) { error = "Could not create repository cache generation"; return false; }
+    fs::rename(index_partial, generation / L"index.json", ec);
+    if (!ec) fs::rename(signature_partial, generation / L"index.json.sig", ec);
+    if (ec) {
+        fs::remove_all(generation, ec);
+        error = "Could not stage repository cache generation"; return false;
+    }
+    if (!activate_pointer(repository_root, digest, error)) return false;
+    for (const auto& item : fs::directory_iterator(generations, ec)) {
+        const auto name = item.path().filename().string();
+        if (item.is_directory() && name != digest && name != previous) fs::remove_all(item.path(), ec);
+        ec.clear();
+    }
+    activated_path = (generation / L"index.json").string();
+    return true;
+}
+
+bool load_signed_repository_cache(const fs::path& repository_root, const std::string& public_key,
+                                  std::string& index_path, std::string& error) {
+    const auto generations = repository_root / L"generations";
+    std::vector<std::string> candidates;
+    const auto current = read_small_text(repository_root / L"current");
+    if (valid_sha256(current)) candidates.push_back(current);
+    std::error_code ec;
+    if (fs::exists(generations)) {
+        for (const auto& item : fs::directory_iterator(generations, ec)) {
+            const auto name = item.path().filename().string();
+            if (item.is_directory() && valid_sha256(name) && name != current) candidates.push_back(name);
+        }
+    }
+    for (const auto& candidate : candidates) {
+        const auto generation = generations / widen(candidate);
+        const auto index = generation / L"index.json";
+        const auto signature = generation / L"index.json.sig";
+        std::string verification_error;
+        if (sha256_file(index) == candidate &&
+            verify_catalog_signature(index, signature, public_key, verification_error)) {
+            if (candidate != current && !activate_pointer(repository_root, candidate, error)) return false;
+            index_path = index.string(); return true;
+        }
+        fs::remove_all(generation, ec); ec.clear();
+    }
+    error = candidates.empty() ? "No verified repository cache is available"
+                               : "No valid repository cache generation remains";
+    return false;
+}
+
 bool json_bool(const std::string& source, const char* key, bool fallback = false) {
     const std::regex expression("\\\"" + std::string(key) + "\\\"\\s*:\\s*(true|false)");
     std::smatch match;
@@ -441,6 +530,7 @@ struct vh_engine {
     std::atomic<vh_job_id> next_id{1};
     std::mutex jobs_mutex;
     std::mutex mutation_mutex;
+    std::mutex repository_mutex;
     std::map<vh_job_id, std::shared_ptr<job>> jobs;
     std::atomic_bool stopping{};
 };
@@ -452,13 +542,29 @@ void execute_job(vh_engine* engine, const std::shared_ptr<job>& current, std::st
     const auto package_id = json_string(request, "packageId");
     if (!vanahub::is_safe_package_id(package_id)) { current->finish(VH_INVALID_ARGUMENT, "Invalid packageId"); return; }
 
+    if (operation == "loadRepositoryCache") {
+        std::scoped_lock repository_lock(engine->repository_mutex);
+        if (!json_bool(request, "requireSignature", false) || engine->builtin_public_key.empty()) {
+            current->finish(VH_INVALID_ARGUMENT, "A signed repository cache is required"); return;
+        }
+        current->update("verifying", "Loading verified repository cache");
+        const auto repository_root = engine->cache_root / L"repositories" / widen(package_id);
+        std::string path; std::string error;
+        if (!load_signed_repository_cache(repository_root, engine->builtin_public_key, path, error)) {
+            current->finish(VH_NOT_FOUND, error); return;
+        }
+        current->finish(VH_OK, path); return;
+    }
+
     if (operation == "fetchRepository") {
+        std::scoped_lock repository_lock(engine->repository_mutex);
         const auto url = json_string(request, "url");
         const auto expected_hash = vanahub::ascii_casefold(json_string(request, "sha256"));
         const auto repositories = engine->cache_root / L"repositories";
+        const auto repository_root = repositories / widen(package_id);
         const auto destination = repositories / (widen(package_id) + L".json");
-        const auto partial = destination.wstring() + L".part";
-        const auto signature_partial = destination.wstring() + L".sig.part";
+        const auto partial = repository_root / L"index.part";
+        const auto signature_partial = repository_root / L"index.sig.part";
         current->update("downloading", "Refreshing repository index");
         std::string error;
         if (!download_file(*current, url, partial, json_bool(request, "allowLocal", false), false, error)) {
@@ -477,9 +583,19 @@ void execute_job(vh_engine* engine, const std::shared_ptr<job>& current, std::st
                 std::error_code ec; fs::remove(partial, ec); fs::remove(signature_partial, ec);
                 current->finish(VH_SCAN_REJECTED, error.empty() ? "Catalog signature is required" : error); return;
             }
+            const auto digest = sha256_file(partial);
+            std::string activated;
+            if (!valid_sha256(digest) ||
+                !activate_signed_repository(repository_root, partial, signature_partial, digest, activated, error)) {
+                std::error_code ec; fs::remove(partial, ec); fs::remove(signature_partial, ec);
+                current->finish(VH_FILESYSTEM_ERROR, error.empty() ? "Could not activate repository cache" : error); return;
+            }
+            current->finish(VH_OK, activated); return;
         }
-        std::error_code ec; fs::create_directories(repositories, ec); fs::rename(partial, destination, ec);
-        if (ec) { fs::remove(partial, ec); current->finish(VH_FILESYSTEM_ERROR, "Could not activate repository cache"); return; }
+        std::error_code ec; fs::create_directories(repositories, ec);
+        if (!MoveFileExW(partial.c_str(), destination.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+            fs::remove(partial, ec); current->finish(VH_FILESYSTEM_ERROR, "Could not activate repository cache"); return;
+        }
         std::error_code cleanup_ec; fs::remove(signature_partial, cleanup_ec);
         current->finish(VH_OK, destination.string()); return;
     }

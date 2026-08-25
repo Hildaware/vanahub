@@ -66,6 +66,8 @@ local function save_state()
 end
 
 local function rebuild_packages()
+    local selected_id = state.selected and state.selected.id or nil;
+    local selected_repository = state.selected and state.selected._repository and state.selected._repository.id or nil;
     local packages = { };
     local revocations = { };
     for _, repository in ipairs(state.repositories) do
@@ -89,7 +91,12 @@ local function rebuild_packages()
         if a.id == b.id then return a._repository.builtin and not b._repository.builtin; end
         return (a.name or a.id):lower() < (b.name or b.id):lower();
     end);
-    state.packages = packages; state.revocations = revocations;
+    state.packages = packages; state.revocations = revocations; state.selected = nil;
+    if selected_id ~= nil then
+        for _, package in ipairs(packages) do
+            if package.id == selected_id and package._repository.id == selected_repository then state.selected = package; break; end
+        end
+    end
 end
 
 local function load_repository(repository, path)
@@ -99,18 +106,30 @@ local function load_repository(repository, path)
     end
     repository.name = document.repository and document.repository.name or repository.name;
     repository.packages = document.packages; repository.revocations = document.revocations or { };
+    repository.generated_at = document.generatedAt;
     repository.loaded = true; rebuild_packages(); save_state(); return true;
 end
 
 local function start_repository_refresh(repository)
-    if not backend.available or repository.url == '' then return; end
+    if not backend.available or repository.url == '' or state.operation ~= nil then return; end
     local job, err = backend.start({
         operation = 'fetchRepository', packageId = repository.id,
         url = repository.url, sha256 = repository.sha256 or '', allowLocal = repository.local_source == true,
         requireSignature = repository.builtin == true, signatureUrl = repository.signature_url or '',
     });
     if job == nil then state.notice = err; return; end
+    repository.status = repository.loaded and 'refreshing (cached)' or 'refreshing';
     state.operation = job; state.operation_context = { kind = 'repository', repository = repository };
+end
+
+local function start_repository_cache(repository)
+    if not backend.available or state.operation ~= nil then return; end
+    local job, err = backend.start({
+        operation = 'loadRepositoryCache', packageId = repository.id, requireSignature = repository.builtin == true,
+    });
+    if job == nil then state.notice = err; start_repository_refresh(repository); return; end
+    repository.status = 'loading cache';
+    state.operation = job; state.operation_context = { kind = 'repository-cache', repository = repository };
 end
 
 local function start_install(package, allow_elevated)
@@ -134,8 +153,16 @@ end
 
 local function complete_operation()
     local context = state.operation_context;
+    local followup = nil;
     if state.operation.result == 0 and context ~= nil then
-        if context.kind == 'repository' then load_repository(context.repository, state.operation.message);
+        if context.kind == 'repository-cache' then
+            if load_repository(context.repository, state.operation.message) then context.repository.status = 'cached'; end
+            followup = context.repository;
+        elseif context.kind == 'repository' then
+            if load_repository(context.repository, state.operation.message) then
+                context.repository.status = 'current';
+                state.notice = nil;
+            end
         elseif context.kind == 'install' then
             local package = context.package;
             state.installed[package.id] = {
@@ -149,8 +176,23 @@ local function complete_operation()
             state.installed[context.packageId] = nil; save_state();
             state.notice = context.packageId .. ' uninstalled; user data was preserved.';
         end
-    elseif state.operation.result ~= 0 then state.notice = state.operation.message; end
+    elseif context ~= nil and context.kind == 'repository-cache' then
+        followup = context.repository;
+    elseif context ~= nil and context.kind == 'repository' and context.repository.loaded then
+        context.repository.status = 'cached (stale)';
+        state.notice = 'Using cached catalog; refresh failed: ' .. tostring(state.operation.message);
+    elseif state.operation.result ~= 0 then
+        if context ~= nil and context.kind == 'repository' then context.repository.status = 'unavailable'; end
+        state.notice = state.operation.message;
+    end
     backend.release(state.operation); state.operation = nil; state.operation_context = nil;
+    if followup ~= nil then start_repository_refresh(followup); end
+end
+
+local function tick_operation()
+    if state.operation == nil then return; end
+    backend.poll(state.operation);
+    if state.operation.terminal then complete_operation(); end
 end
 
 local function print_help()
@@ -174,12 +216,10 @@ local function draw_engine_status()
     end
     imgui.TextColored({ 0.35, 0.85, 0.45, 1.0 }, 'Native engine ready');
     if state.operation ~= nil then
-        backend.poll(state.operation); imgui.Separator();
+        imgui.Separator();
         imgui.Text('Operation: ' .. tostring(state.operation.phase));
         if state.operation.message ~= '' then imgui.TextWrapped(state.operation.message); end
-        if not state.operation.terminal then
-            if imgui.Button('Cancel') then backend.cancel(state.operation); end
-        elseif imgui.Button('Finish') then complete_operation(); end
+        if imgui.Button('Cancel') then backend.cancel(state.operation); end
     end
 end
 
@@ -254,7 +294,14 @@ local function draw_repositories()
     for _, repository in ipairs(state.repositories) do
         imgui.Text(repository.name); imgui.SameLine();
         imgui.TextColored(repository.builtin and { 0.35, 0.75, 1.0, 1.0 } or { 1.0, 0.65, 0.2, 1.0 }, repository.builtin and 'Screened' or 'Custom');
-        if repository.url ~= '' then imgui.SameLine(); if imgui.SmallButton('Refresh##' .. repository.id) then start_repository_refresh(repository); end end
+        if repository.status ~= nil then imgui.SameLine(); imgui.TextDisabled(tostring(repository.status)); end
+        if repository.generated_at ~= nil then imgui.TextDisabled('Catalog generated: ' .. tostring(repository.generated_at)); end
+        if repository.url ~= '' then
+            imgui.SameLine();
+            if state.operation ~= nil then imgui.BeginDisabled(true); end
+            if imgui.SmallButton('Refresh##' .. repository.id) then start_repository_refresh(repository); end
+            if state.operation ~= nil then imgui.EndDisabled(); end
+        end
     end
     imgui.Separator();
     imgui.TextWrapped('Custom repositories can deliver code that reads files, accesses memory, or invokes native APIs. Add only sources you trust.');
@@ -279,9 +326,10 @@ ashita.fs.create_directory(config_root);
 load_state();
 local version_root = addon.path .. 'versions\\' .. (addon.active_version or addon.version or '0.1.0') .. '\\';
 backend.initialize(version_root, builtin.public_key);
-if backend.available and builtin.index_url ~= '' then start_repository_refresh(state.repositories[1]); end
+if backend.available and builtin.index_url ~= '' then start_repository_cache(state.repositories[1]); end
 
 ashita.events.register('d3d_present', 'vanahub_render', function ()
+    tick_operation();
     if not state.visible[1] then return; end
     imgui.SetNextWindowSize({ 800, 560 }, ImGuiCond_FirstUseEver);
     if imgui.Begin('VanaHub##vanahub', state.visible, bit.bor(ImGuiWindowFlags_MenuBar, ImGuiWindowFlags_NoCollapse)) then

@@ -54,6 +54,11 @@ make deploy-local DEPLOY_ROOT=/path/to/ashita/addons
 
 ## Catalog scanner
 
+The public index, package manifests, and admission workflows live in the
+separate [`Hildaware/vanahub-catalog`](https://github.com/Hildaware/vanahub-catalog)
+repository. This product repository owns the shared scanner and signing-policy
+tools that catalog automation pins to reviewed product commits.
+
 ```sh
 python3 -m unittest discover -s tests/python -v
 python3 tools/catalog_scan.py package.json --output scan-report.json
