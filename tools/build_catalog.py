@@ -44,15 +44,22 @@ def main() -> int:
     (args.output / "index.json").write_bytes(payload)
 
     encoded_key = os.environ.get(args.signing_key_env)
-    if encoded_key:
-        try:
-            from nacl.signing import SigningKey
-        except ImportError as exc:
-            raise SystemExit("PyNaCl is required when signing") from exc
-        key = SigningKey(base64.b64decode(encoded_key))
-        signature = key.sign(payload).signature
-        detached = {"keyId": args.key_id, "algorithm": "Ed25519", "signature": base64.b64encode(signature).decode("ascii")}
-        (args.output / "index.json.sig").write_text(json.dumps(detached, separators=(",", ":"), sort_keys=True) + "\n", encoding="utf-8")
+    if not encoded_key:
+        raise SystemExit(f"{args.signing_key_env} is required; refusing to publish an unsigned catalog")
+    try:
+        from nacl.signing import SigningKey
+    except ImportError as exc:
+        raise SystemExit("PyNaCl is required when signing") from exc
+    try:
+        seed = base64.b64decode(encoded_key, validate=True)
+        if len(seed) != 32:
+            raise ValueError("seed must contain exactly 32 bytes")
+        key = SigningKey(seed)
+    except (ValueError, TypeError) as exc:
+        raise SystemExit(f"{args.signing_key_env} must be a base64-encoded 32-byte Ed25519 seed") from exc
+    signature = key.sign(payload).signature
+    detached = {"keyId": args.key_id, "algorithm": "Ed25519", "signature": base64.b64encode(signature).decode("ascii")}
+    (args.output / "index.json.sig").write_text(json.dumps(detached, separators=(",", ":"), sort_keys=True) + "\n", encoding="utf-8")
     return 0
 
 
