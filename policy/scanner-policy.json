@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "limits": {
     "compressedBytes": 52428800,
     "expandedBytes": 209715200,
@@ -13,6 +13,16 @@
     "vanahub": "https://github.com/Hildaware/vanahub"
   },
   "allowedModules": ["common", "chat", "imgui", "settings", "json", "ffxi.enums", "ffxi.recast", "ffxi.targets", "ffxi.vanatime", "ffxi.weather"],
+  "capabilityWarnings": {
+    "packet-read": "Reads incoming game network packets.",
+    "settings-write": "Writes persistent addon settings.",
+    "bundled-file-read": "Reads files bundled with the addon."
+  },
+  "dangerousCapabilities": [
+    "native-interop", "network", "file-access", "process-execution",
+    "dynamic-code", "unapproved-module", "memory-write", "packet-injection",
+    "command-injection", "registry-write", "obfuscation", "elevated"
+  ],
   "blockedSymbols": [
     "ffi", "socket", "ssl.https", "os", "io", "package", "os.execute", "io.popen", "package.loadlib",
     "loadstring", "load", "loadfile", "dofile", "getfenv", "setfenv", "_ENV", "string.dump", "debug", "ashita.memory.write",

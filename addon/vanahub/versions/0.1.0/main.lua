@@ -223,11 +223,25 @@ local function draw_engine_status()
     end
 end
 
+local category_labels = {
+    combat = 'Combat', jobs = 'Jobs', inventory = 'Inventory', crafting = 'Crafting', economy = 'Economy',
+    ['maps-travel'] = 'Maps & Travel', ['user-interface'] = 'User Interface',
+    ['chat-communication'] = 'Chat & Communication', ['data-tracking'] = 'Data & Tracking',
+    ['quality-of-life'] = 'Quality of Life', ['development-tools'] = 'Development Tools',
+};
+
 local function package_matches(package)
     local query = (state.search[1] or ''):lower();
     if query == '' then return true; end
-    return (package.name or package.id):lower():find(query, 1, true) ~= nil
-        or (package.description or ''):lower():find(query, 1, true) ~= nil;
+    if (package.name or package.id):lower():find(query, 1, true) ~= nil
+        or (package.description or ''):lower():find(query, 1, true) ~= nil then return true; end
+    if type(package.categories) == 'table' then
+        for _, category in ipairs(package.categories) do
+            local label = category_labels[category] or tostring(category);
+            if label:lower():find(query, 1, true) ~= nil then return true; end
+        end
+    end
+    return false;
 end
 
 local function draw_package_details(package)
@@ -239,8 +253,15 @@ local function draw_package_details(package)
     else
         imgui.TextColored({ 1.0, 0.65, 0.2, 1.0 }, 'Custom source: not trusted by the built-in repository.');
     end
+    if type(package.categories) == 'table' then
+        local labels = {};
+        for _, category in ipairs(package.categories) do
+            table.insert(labels, category_labels[category] or tostring(category));
+        end
+        imgui.TextWrapped('Categories: ' .. table.concat(labels, ', '));
+    end
     if type(package.declaredCapabilities) == 'table' then
-        imgui.TextWrapped('Capabilities: ' .. table.concat(package.declaredCapabilities, ', '));
+        imgui.TextWrapped('Technical access: ' .. table.concat(package.declaredCapabilities, ', '));
     end
     if package._revocation ~= nil then
         imgui.TextColored({ 1.0, 0.25, 0.2, 1.0 }, 'REVOKED: ' .. tostring(package._revocation.reason));

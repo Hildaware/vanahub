@@ -59,10 +59,43 @@ class CatalogScanTests(unittest.TestCase):
         self.assertFalse(report["accepted"])
         self.assertIn("manifest.screenshots", {f["rule_id"] for f in report["findings"]})
 
+    def test_accepts_supported_categories_and_rejects_unknown_ones(self):
+        accepted = self.run_scan(
+            {"sample/sample.lua": "return true"},
+            categories=["combat", "quality-of-life"],
+        )
+        self.assertTrue(accepted["accepted"], accepted["findings"])
+        rejected = self.run_scan(
+            {"sample/sample.lua": "return true"},
+            categories=["not-a-category"],
+        )
+        self.assertFalse(rejected["accepted"])
+        self.assertIn("manifest.categories", {f["rule_id"] for f in rejected["findings"]})
+
     def test_rejects_network(self):
         report = self.run_scan({"sample/sample.lua": "local socket = require('socket')\n"})
         self.assertFalse(report["accepted"])
         self.assertIn("lua.blocked-symbol", {f["rule_id"] for f in report["findings"]})
+        self.assertIn("network", {f["capability"] for f in report["findings"]})
+
+    def test_warns_for_sensitive_allowed_capabilities(self):
+        report = self.run_scan(
+            {"sample/sample.lua": "register_event('packet_in', handler)\n"},
+            declaredCapabilities=["packet-read"],
+        )
+        self.assertTrue(report["accepted"], report["findings"])
+        warning = next(f for f in report["findings"] if f["rule_id"] == "lua.capability-warning")
+        self.assertEqual(warning["severity"], "warning")
+        self.assertEqual(warning["capability"], "packet-read")
+        self.assertEqual(report["detectedCapabilities"], ["packet-read"])
+
+    def test_rejects_a_manifest_missing_detected_capabilities(self):
+        report = self.run_scan(
+            {"sample/sample.lua": "register_event('packet_in', handler)\n"},
+            declaredCapabilities=[],
+        )
+        self.assertFalse(report["accepted"])
+        self.assertIn("manifest.missing-capability", {f["rule_id"] for f in report["findings"]})
 
     def test_rejects_aliases_of_dangerous_standard_libraries(self):
         report = self.run_scan({"sample/sample.lua": "local runner = os\nrunner.execute('calc')\n"})
@@ -80,6 +113,8 @@ class CatalogScanTests(unittest.TestCase):
         report = self.run_scan({"sample/sample.lua": "local helper = require('not_bundled')\n"})
         self.assertFalse(report["accepted"])
         self.assertIn("lua.disallowed-module", {f["rule_id"] for f in report["findings"]})
+        finding = next(f for f in report["findings"] if f["rule_id"] == "lua.disallowed-module")
+        self.assertEqual(finding["capability"], "unapproved-module")
 
     def test_accepts_bundled_local_module(self):
         report = self.run_scan({

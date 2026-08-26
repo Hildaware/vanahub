@@ -62,7 +62,7 @@ def validate_manifest(manifest: dict) -> list[Finding]:
         "compressedSize", "archiveRoot", "entrypoint", "declaredCapabilities",
     }
     missing = sorted(required - manifest.keys())
-    optional = {"iconUrl", "screenshots"}
+    optional = {"iconUrl", "screenshots", "categories"}
     unknown = sorted(manifest.keys() - required - optional)
     if unknown:
         findings.append(Finding("manifest.unknown-fields", "error", f"Unknown fields: {', '.join(unknown)}"))
@@ -101,6 +101,24 @@ def validate_manifest(manifest: dict) -> list[Finding]:
                 "manifest.screenshots", "error",
                 "screenshots must contain 1 to 10 unique HTTPS URLs",
             ))
+    if "categories" in manifest:
+        categories = manifest["categories"]
+        allowed_categories = {
+            "combat", "jobs", "inventory", "crafting", "economy",
+            "maps-travel", "user-interface", "chat-communication",
+            "data-tracking", "quality-of-life", "development-tools",
+        }
+        valid_categories = (
+            isinstance(categories, list)
+            and 1 <= len(categories) <= 3
+            and len(categories) == len(set(categories))
+            and all(category in allowed_categories for category in categories)
+        )
+        if not valid_categories:
+            findings.append(Finding(
+                "manifest.categories", "error",
+                "categories must contain 1 to 3 unique supported categories",
+            ))
     if isinstance(manifest.get("sourceUrl"), str) and isinstance(manifest.get("downloadUrl"), str):
         source = urllib.parse.urlparse(manifest["sourceUrl"]).path.strip("/").split("/")
         download = urllib.parse.urlparse(manifest["downloadUrl"]).path.strip("/").split("/")
@@ -127,6 +145,25 @@ def normalized_zip_path(name: str) -> PurePosixPath:
     return path
 
 
+CAPABILITY_PATTERNS = {
+    "ui": re.compile(r"\bimgui\b", re.IGNORECASE),
+    "game-state-read": re.compile(r"\b(?:GetPlayerEntity|GetEntity|ffxi\.(?:targets|recast|vanatime|weather))\b", re.IGNORECASE),
+    "packet-read": re.compile(r"\bpacket_in\b|\bregister_event\s*\(\s*['\"]packet", re.IGNORECASE),
+    "chat-output": re.compile(r"\b(?:print|chat\.)\s*\(", re.IGNORECASE),
+    "command-handler": re.compile(r"\bcommand\b|\bregister_event\s*\(\s*['\"]command", re.IGNORECASE),
+    "settings-write": re.compile(r"\bsettings\.(?:save|store)\b", re.IGNORECASE),
+    "bundled-file-read": re.compile(r"\bio\.open\b|\bread_text\b", re.IGNORECASE),
+}
+
+
+def detected_capabilities(text: str) -> set[str]:
+    return {
+        capability
+        for capability, pattern in CAPABILITY_PATTERNS.items()
+        if pattern.search(text)
+    }
+
+
 def lua_findings(text: str, path: str, policy: dict, local_modules: set[str] | None = None) -> list[Finding]:
     findings: list[Finding] = []
     blocked = {
@@ -151,7 +188,7 @@ def lua_findings(text: str, path: str, policy: dict, local_modules: set[str] | N
         literal_requires.add(match.group(2))
     all_requires = len(re.findall(r"\brequire\b", text))
     if all_requires != len(literal_requires):
-        findings.append(Finding("lua.computed-require", "error", "All require targets must be unique string literals", path))
+        findings.append(Finding("lua.computed-require", "error", "All require targets must be unique string literals", path, capability="dynamic-code"))
 
     if re.search(r"\b_G\b|\bpackage\s*[.[]", text):
         findings.append(Finding("lua.environment-manipulation", "error", "Global or package environment manipulation is prohibited", path, capability="dynamic-code"))
@@ -165,13 +202,13 @@ def lua_findings(text: str, path: str, policy: dict, local_modules: set[str] | N
         if module in policy["allowedModules"] or module in local_modules:
             continue
         if not re.fullmatch(r"[A-Za-z0-9_.-]+", module):
-            findings.append(Finding("lua.invalid-module", "error", f"Invalid or dynamic-looking module name: {module}", path))
+            findings.append(Finding("lua.invalid-module", "error", f"Invalid or dynamic-looking module name: {module}", path, capability="dynamic-code"))
         else:
-            findings.append(Finding("lua.disallowed-module", "error", f"Module is neither policy-approved nor bundled locally: {module}", path))
+            findings.append(Finding("lua.disallowed-module", "error", f"Module is neither policy-approved nor bundled locally: {module}", path, capability="unapproved-module"))
     return findings
 
 
-def scan_archive(archive: Path, manifest: dict, policy: dict) -> tuple[list[Finding], list[str]]:
+def scan_archive(archive: Path, manifest: dict, policy: dict) -> tuple[list[Finding], list[str], set[str]]:
     findings: list[Finding] = []
     files: list[str] = []
     limits = policy["limits"]
@@ -180,6 +217,7 @@ def scan_archive(archive: Path, manifest: dict, policy: dict) -> tuple[list[Find
     root = manifest.get("archiveRoot", "").strip("/")
     prefix = f"{root}/" if root else ""
     entrypoint_found = False
+    capabilities: set[str] = set()
 
     try:
         with zipfile.ZipFile(archive) as package:
@@ -241,6 +279,7 @@ def scan_archive(archive: Path, manifest: dict, policy: dict) -> tuple[list[Find
                     except (UnicodeDecodeError, RuntimeError, zipfile.BadZipFile):
                         findings.append(Finding("lua.encoding", "error", "Lua source must be valid UTF-8 and readable", normalized))
                     else:
+                        capabilities.update(detected_capabilities(text))
                         findings.extend(lua_findings(text, normalized, policy, local_modules))
     except (OSError, zipfile.BadZipFile, zipfile.LargeZipFile) as exc:
         findings.append(Finding("zip.invalid", "error", f"Invalid ZIP: {exc}"))
@@ -249,7 +288,11 @@ def scan_archive(archive: Path, manifest: dict, policy: dict) -> tuple[list[Find
         findings.append(Finding("zip.expanded-size", "error", "Total expanded-size limit exceeded"))
     if not entrypoint_found:
         findings.append(Finding("package.entrypoint", "error", "Declared entrypoint was not found at the archive root"))
-    return findings, sorted(files, key=str.casefold)
+    for capability in sorted(capabilities):
+        message = policy.get("capabilityWarnings", {}).get(capability)
+        if message:
+            findings.append(Finding("lua.capability-warning", "warning", message, capability=capability))
+    return findings, sorted(files, key=str.casefold), capabilities
 
 
 class RestrictedRedirect(urllib.request.HTTPRedirectHandler):
@@ -281,6 +324,7 @@ def scan(manifest_path: Path, archive_path: Path | None = None) -> dict:
         manifest = json.load(handle)
     findings = validate_manifest(manifest)
     files: list[str] = []
+    capabilities: set[str] = set()
     temporary: tempfile.TemporaryDirectory[str] | None = None
     try:
         if archive_path is None and not findings:
@@ -299,8 +343,15 @@ def scan(manifest_path: Path, archive_path: Path | None = None) -> dict:
             if data_hash != manifest.get("sha256"):
                 findings.append(Finding("artifact.hash", "error", f"SHA-256 mismatch: got {data_hash}"))
         if archive_path is not None and archive_path.exists() and not findings:
-            archive_findings, files = scan_archive(archive_path, manifest, policy)
+            archive_findings, files, capabilities = scan_archive(archive_path, manifest, policy)
             findings.extend(archive_findings)
+            declared = set(manifest.get("declaredCapabilities", []))
+            for capability in sorted(capabilities - declared):
+                findings.append(Finding(
+                    "manifest.missing-capability", "error",
+                    f"Scanner-detected capability is missing from the manifest: {capability}",
+                    capability=capability,
+                ))
     finally:
         if temporary:
             temporary.cleanup()
@@ -313,6 +364,7 @@ def scan(manifest_path: Path, archive_path: Path | None = None) -> dict:
         "accepted": not any(f.severity == "error" for f in findings),
         "findings": [asdict(f) for f in findings],
         "files": files,
+        "detectedCapabilities": sorted(capabilities),
     }
 
 
