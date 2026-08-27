@@ -38,5 +38,19 @@ refreshes the signed remote catalog in the background on startup. Built-in
 catalog icons and screenshots are downloaded lazily, verified against their
 content-addressed filenames, and cached under VanaHub's configuration cache.
 
+## Managed startup
+
+Add only VanaHub to the Ashita startup script:
+
+```text
+/addon load vanahub
+```
+
+The Installed tab provides named profiles, per-addon Auto-load checkboxes, and
+load-order controls. VanaHub loads the active profile one addon at a time after
+its verified local catalog-cache check finishes. Load and Unload affect only
+the current session; Auto-load changes the next startup. Ordering applies only
+to addons managed by VanaHub, not to other entries left in Ashita's scripts.
+
 For the local HorizonXI installation, `make deploy-local` builds and deploys
 directly to `/Users/bferrari/Games/FFXI/HorizonXI/addons/vanahub`.

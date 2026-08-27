@@ -68,6 +68,16 @@ python3 -m unittest discover -s tests/python -v
 python3 tools/catalog_scan.py package.json --output scan-report.json
 ```
 
+## Frontend tests
+
+The profile state and migration logic is independent of Ashita and can be
+tested with any Lua 5.1-compatible interpreter:
+
+```sh
+lua tests/lua/test_profiles.lua
+luac -p addon/vanahub/vanahub.lua addon/vanahub/versions/0.1.0/*.lua
+```
+
 The Windows ABI smoke test runs in Product CI. It can also run under a Wine
 prefix that includes 32-bit/WoW64 support; a 64-bit-only Wine prefix cannot
 launch the PE32 test binary.

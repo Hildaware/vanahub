@@ -7,15 +7,18 @@ local ffi = require 'ffi';
 local d3d8 = require 'd3d8';
 local backend = require 'backend';
 local builtin = require 'builtin';
+local profiles = require 'profiles';
 
 local install_root = AshitaCore:GetInstallPath() .. '\\addons\\';
 local config_root = AshitaCore:GetInstallPath() .. '\\config\\addons\\vanahub\\';
 local state_path = config_root .. 'state.json';
 local repository_path = config_root .. 'repositories.json';
 local state = {
+    schemaVersion = 2,
     visible = T{ false }, search = T{ '' }, selected = nil, packages = { }, installed = { },
-    repositories = { }, operation = nil, operation_context = nil, notice = nil,
-    revocations = { }, addon_action = nil,
+    profiles = { }, activeProfileId = nil, profile_name = T{ '' }, profile_editor = nil,
+    confirm_delete_profile = nil, repositories = { }, operation = nil, operation_context = nil, notice = nil,
+    revocations = { }, addon_action = nil, startup = { ready = false, started = false },
     media = { cache = { }, queue = { }, job = nil, request = nil },
     custom_url = T{ '' }, custom_ack = T{ false }, developer_mode = T{ false }, consent_package = nil,
 };
@@ -50,12 +53,18 @@ local function is_safe_package_id(value)
 end
 
 local function load_state()
-    local installed = decode(read_text(state_path));
-    if type(installed) == 'table' then state.installed = installed; end
+    local raw = decode(read_text(state_path));
+    local installed = raw;
+    if type(raw) == 'table' and raw.schemaVersion == 2 then installed = raw.installed; end
+    if type(installed) ~= 'table' then installed = { }; end
+    state.installed = installed;
     for id, _ in pairs(state.installed) do
         if not is_safe_package_id(id)
             or not ashita.fs.exists(install_root .. id .. '\\.vanahub-owned') then state.installed[id] = nil; end
     end
+    local document = profiles.normalize(raw, state.installed);
+    state.profiles = document.profiles;
+    state.activeProfileId = document.activeProfileId;
     state.repositories = {
         { id = 'builtin', name = 'Built-in screened repository', url = builtin.index_url, signature_url = builtin.signature_url, builtin = true, enabled = true },
     };
@@ -70,12 +79,22 @@ local function load_state()
 end
 
 local function save_state()
-    write_text(state_path, encode(state.installed));
+    local state_saved = write_text(state_path, encode({
+        schemaVersion = 2,
+        installed = state.installed,
+        profiles = state.profiles,
+        activeProfileId = state.activeProfileId,
+    }));
     local custom = { };
     for _, repository in ipairs(state.repositories) do
         if not repository.builtin then custom[#custom + 1] = repository; end
     end
-    write_text(repository_path, encode(custom));
+    local repositories_saved = write_text(repository_path, encode(custom));
+    if not state_saved or not repositories_saved then
+        state.notice = 'Could not save VanaHub settings.';
+        return false;
+    end
+    return true;
 end
 
 local function rebuild_packages()
@@ -101,6 +120,7 @@ local function rebuild_packages()
                             id = package.id, name = package.name, version = package.version,
                             sha256 = package.sha256, source = repository.id,
                         };
+                        profiles.add_installed(state, package.id);
                     end
                     package._repository = repository; packages[#packages + 1] = package;
                 end
@@ -147,7 +167,9 @@ local function start_repository_cache(repository)
     local job, err = backend.start({
         operation = 'loadRepositoryCache', packageId = repository.id, requireSignature = repository.builtin == true,
     });
-    if job == nil then state.notice = err; start_repository_refresh(repository); return; end
+    if job == nil then
+        state.notice = err; state.startup.ready = true; start_repository_refresh(repository); return;
+    end
     repository.status = 'loading cache';
     state.operation = job; state.operation_context = { kind = 'repository-cache', repository = repository };
 end
@@ -180,14 +202,14 @@ local function is_addon_loaded(package_id)
     return loaded == true;
 end
 
-local function set_addon_enabled(package_id, enabled)
+local function set_addon_loaded(package_id, enabled, startup)
     if not is_safe_package_id(package_id) then
         state.notice = 'Refusing to load an invalid package id.'; return;
     end
     local action = enabled and 'load' or 'unload';
     AshitaCore:GetChatManager():QueueCommand(-1, '/addon ' .. action .. ' ' .. package_id);
     state.addon_action = {
-        packageId = package_id, enabled = enabled, started = ashita.time.get_tick64(),
+        packageId = package_id, enabled = enabled, started = ashita.time.get_tick64(), startup = startup == true,
     };
     state.notice = (enabled and 'Loading ' or 'Unloading ') .. package_id .. '...';
 end
@@ -197,12 +219,57 @@ local function tick_addon_action()
     if action == nil then return; end
     local loaded = is_addon_loaded(action.packageId);
     if loaded ~= nil and loaded == action.enabled then
-        state.notice = action.packageId .. (action.enabled and ' enabled.' or ' disabled.');
+        state.notice = action.packageId .. (action.enabled and ' loaded.' or ' unloaded.');
+        if action.startup then state.startup.loaded = state.startup.loaded + 1; end
         state.addon_action = nil;
     elseif ashita.time.get_tick64() - action.started >= 5000 then
-        state.notice = 'Could not confirm that ' .. action.packageId
+        local message = 'Could not confirm that ' .. action.packageId
             .. (action.enabled and ' loaded.' or ' unloaded.');
+        state.notice = message;
+        if action.startup then state.startup.failures[#state.startup.failures + 1] = message; end
         state.addon_action = nil;
+    end
+end
+
+local function begin_startup()
+    local startup = state.startup;
+    startup.started = true; startup.completed = false; startup.queue = { };
+    startup.loaded = 0; startup.already_loaded = 0; startup.failures = { }; startup.summary = nil;
+    local profile = profiles.active(state);
+    startup.profile_name = profile and profile.name or 'Default';
+    for _, entry in ipairs(profile and profile.addons or { }) do
+        if entry.autoLoad == true and entry.id ~= 'vanahub' then
+            local installed = state.installed[entry.id];
+            if installed == nil or not is_safe_package_id(entry.id)
+                or not ashita.fs.exists(install_root .. entry.id .. '\\.vanahub-owned') then
+                startup.failures[#startup.failures + 1] = entry.id .. ' is not installed by VanaHub.';
+            elseif state.revocations[installed.sha256] ~= nil then
+                startup.failures[#startup.failures + 1] = entry.id .. ' was skipped because its installed artifact is revoked.';
+            else startup.queue[#startup.queue + 1] = entry.id; end
+        end
+    end
+    startup.total = #startup.queue + #startup.failures;
+end
+
+local function tick_startup()
+    local startup = state.startup;
+    if not startup.ready then return; end
+    if not startup.started then begin_startup(); end
+    if startup.completed or state.addon_action ~= nil then return; end
+    while #startup.queue > 0 do
+        local package_id = table.remove(startup.queue, 1);
+        if is_addon_loaded(package_id) == true then startup.already_loaded = startup.already_loaded + 1;
+        else set_addon_loaded(package_id, true, true); return; end
+    end
+    startup.completed = true;
+    local summary = 'Auto-load profile ' .. startup.profile_name .. ': ' .. tostring(startup.loaded)
+        .. ' loaded, ' .. tostring(startup.already_loaded) .. ' already loaded, '
+        .. tostring(#startup.failures) .. ' failed or skipped.';
+    startup.summary = summary;
+    state.notice = summary;
+    print(chat.header('VanaHub'):append(#startup.failures > 0 and chat.error(summary) or chat.message(summary)));
+    for _, failure in ipairs(startup.failures) do
+        print(chat.header('VanaHub'):append(chat.error(failure)));
     end
 end
 
@@ -319,11 +386,14 @@ local function complete_operation()
                 id = package.id, name = package.name, version = package.version,
                 sha256 = package.sha256, source = package._repository.id,
             };
+            profiles.add_installed(state, package.id);
             save_state();
             if package.id == 'vanahub' then state.notice = 'Package manager update staged; it will activate on the next Ashita launch.';
-            else state.notice = (package.name or package.id) .. ' installed. Select Enable to load it.'; end
+            else state.notice = (package.name or package.id) .. ' installed. Select Load to use it now.'; end
         elseif context.kind == 'uninstall' then
-            state.installed[context.packageId] = nil; save_state();
+            state.installed[context.packageId] = nil;
+            profiles.remove_installed(state, context.packageId);
+            save_state();
             state.notice = context.packageId .. ' uninstalled; user data was preserved.';
         end
     elseif context ~= nil and context.kind == 'repository-cache' then
@@ -337,6 +407,7 @@ local function complete_operation()
             or ('Operation failed with result code ' .. tostring(state.operation.result) .. '.');
         print(chat.header('VanaHub'):append(chat.error(state.notice)));
     end
+    if context ~= nil and context.kind == 'repository-cache' then state.startup.ready = true; end
     backend.release(state.operation); state.operation = nil; state.operation_context = nil;
     if followup ~= nil then start_repository_refresh(followup); end
 end
@@ -419,14 +490,15 @@ local function draw_package_details(package)
     if package._revocation ~= nil then
         imgui.TextColored({ 1.0, 0.25, 0.2, 1.0 }, 'REVOKED: ' .. tostring(package._revocation.reason));
     end
-    local busy = state.operation ~= nil or state.addon_action ~= nil;
+    local startup_busy = state.startup.started and not state.startup.completed;
+    local busy = state.operation ~= nil or state.addon_action ~= nil or startup_busy;
     imgui.Separator(); if busy then imgui.BeginDisabled(true); end
     if package._revocation ~= nil and not busy then imgui.BeginDisabled(true); end
     local installed = state.installed[package.id];
     if installed ~= nil then
         local loaded = is_addon_loaded(package.id) == true;
-        if package.id ~= 'vanahub' and imgui.Button(loaded and 'Disable' or 'Enable') then
-            set_addon_enabled(package.id, not loaded);
+        if package.id ~= 'vanahub' and imgui.Button(loaded and 'Unload' or 'Load') then
+            set_addon_loaded(package.id, not loaded, false);
         end
         if package.id ~= 'vanahub' then imgui.SameLine(); end
         if imgui.Button('Uninstall') then start_uninstall(package.id); end
@@ -436,7 +508,7 @@ local function draw_package_details(package)
         end
         if package.id ~= 'vanahub' then
             imgui.TextColored(loaded and { 0.35, 0.85, 0.45, 1.0 } or { 0.65, 0.65, 0.65, 1.0 },
-                loaded and 'Enabled' or 'Disabled');
+                loaded and 'Loaded' or 'Not loaded');
         end
     elseif package._repository.builtin then
         if imgui.Button('Install') then start_install(package, false); end
@@ -467,7 +539,7 @@ local function draw_browse()
     for _, package in ipairs(state.packages) do
         local label = package.name or package.id;
         if state.installed[package.id] ~= nil and package.id ~= 'vanahub' then
-            label = label .. (is_addon_loaded(package.id) == true and '  [Enabled]' or '  [Disabled]');
+            label = label .. (is_addon_loaded(package.id) == true and '  [Loaded]' or '  [Not loaded]');
         end
         if package_matches(package) then
             draw_icon(package, 30); imgui.SameLine();
@@ -482,28 +554,114 @@ local function draw_browse()
     imgui.EndChild();
 end
 
+local function startup_busy()
+    return state.startup.started and not state.startup.completed;
+end
+
+local function begin_profile_editor(mode, value)
+    state.profile_editor = mode;
+    state.profile_name[1] = value or '';
+    state.confirm_delete_profile = nil;
+end
+
+local function draw_profile_controls(busy)
+    local active = profiles.active(state);
+    if busy then imgui.BeginDisabled(true); end
+    imgui.SetNextItemWidth(220);
+    if imgui.BeginCombo('Profile', active and active.name or 'Default') then
+        for _, profile in ipairs(state.profiles) do
+            local selected = profile.id == state.activeProfileId;
+            if imgui.Selectable(profile.name .. '##profile-' .. profile.id, selected) then
+                state.activeProfileId = profile.id;
+                state.profile_editor = nil; state.confirm_delete_profile = nil; save_state();
+            end
+            if selected then imgui.SetItemDefaultFocus(); end
+        end
+        imgui.EndCombo();
+    end
+    imgui.SameLine();
+    if imgui.SmallButton('New') then begin_profile_editor('create', 'New Profile'); end
+    imgui.SameLine();
+    if imgui.SmallButton('Rename') then begin_profile_editor('rename', active and active.name or ''); end
+    imgui.SameLine();
+    if imgui.SmallButton('Duplicate') then
+        profiles.add(state, (active and active.name or 'Profile') .. ' Copy', true); save_state();
+    end
+    imgui.SameLine();
+    if state.confirm_delete_profile == state.activeProfileId then
+        if imgui.SmallButton('Confirm delete') then
+            local ok, err = profiles.remove(state, state.activeProfileId);
+            if not ok then state.notice = err; else save_state(); end
+            state.confirm_delete_profile = nil;
+        end
+        imgui.SameLine();
+        if imgui.SmallButton('Cancel') then state.confirm_delete_profile = nil; end
+    elseif imgui.SmallButton('Delete') then state.confirm_delete_profile = state.activeProfileId; end
+    if state.profile_editor ~= nil then
+        imgui.SetNextItemWidth(220); imgui.InputText('Name##profile-name', state.profile_name, 80);
+        imgui.SameLine();
+        if imgui.SmallButton('Save##profile-name') then
+            if state.profile_editor == 'create' then
+                profiles.add(state, state.profile_name[1], false); save_state(); state.profile_editor = nil;
+            else
+                local ok, err = profiles.rename(state, state.activeProfileId, state.profile_name[1]);
+                if ok then save_state(); state.profile_editor = nil; else state.notice = err; end
+            end
+        end
+        imgui.SameLine();
+        if imgui.SmallButton('Cancel##profile-name') then state.profile_editor = nil; end
+    end
+    if busy then imgui.EndDisabled(); end
+end
+
 local function draw_installed()
+    local busy = state.operation ~= nil or state.addon_action ~= nil or startup_busy();
+    draw_profile_controls(busy);
+    imgui.TextDisabled('Auto-load and order apply the next time VanaHub starts.');
+    if state.startup.started and not state.startup.completed then
+        local processed = state.startup.loaded + state.startup.already_loaded + #state.startup.failures;
+        imgui.Text('Auto-loading ' .. state.startup.profile_name .. ': ' .. tostring(processed)
+            .. ' / ' .. tostring(state.startup.total));
+    elseif state.startup.summary ~= nil then imgui.TextWrapped(state.startup.summary); end
+    imgui.Separator();
+    local profile = profiles.active(state);
     local any = false;
-    for id, package in pairs(state.installed) do
-        any = true; imgui.Text((package.name or id) .. '  ' .. tostring(package.version)); imgui.SameLine();
-        local loaded = is_addon_loaded(id) == true;
-        if id ~= 'vanahub' then
-            imgui.TextColored(loaded and { 0.35, 0.85, 0.45, 1.0 } or { 0.65, 0.65, 0.65, 1.0 },
-                loaded and 'Enabled' or 'Disabled');
+    for index, entry in ipairs(profile and profile.addons or { }) do
+        local id, package = entry.id, state.installed[entry.id];
+        if package ~= nil then
+            any = true;
+            if busy or index == 1 then imgui.BeginDisabled(true); end
+            if imgui.ArrowButton('up##' .. id, ImGuiDir_Up) then profiles.move(profile, index, -1); save_state(); end
+            if busy or index == 1 then imgui.EndDisabled(); end
             imgui.SameLine();
+            if busy or index == #profile.addons then imgui.BeginDisabled(true); end
+            if imgui.ArrowButton('down##' .. id, ImGuiDir_Down) then profiles.move(profile, index, 1); save_state(); end
+            if busy or index == #profile.addons then imgui.EndDisabled(); end
+            imgui.SameLine();
+            local auto_load = T{ entry.autoLoad == true };
+            if busy or id == 'vanahub' then imgui.BeginDisabled(true); end
+            if imgui.Checkbox('Auto-load##' .. id, auto_load) then entry.autoLoad = auto_load[1] == true; save_state(); end
+            if busy or id == 'vanahub' then imgui.EndDisabled(); end
+            imgui.SameLine();
+            imgui.Text((package.name or id) .. '  ' .. tostring(package.version)); imgui.SameLine();
+            local loaded = is_addon_loaded(id) == true;
+            if id ~= 'vanahub' then
+                imgui.TextColored(loaded and { 0.35, 0.85, 0.45, 1.0 } or { 0.65, 0.65, 0.65, 1.0 },
+                    loaded and 'Loaded' or 'Not loaded');
+                imgui.SameLine();
+            end
+            local revocation = state.revocations[package.sha256];
+            if revocation ~= nil then
+                imgui.TextColored({ 1.0, 0.25, 0.2, 1.0 }, 'REVOKED: ' .. tostring(revocation.reason));
+            end
+            if busy then imgui.BeginDisabled(true); end
+            if id ~= 'vanahub' and imgui.SmallButton((loaded and 'Unload##' or 'Load##') .. id) then
+                set_addon_loaded(id, not loaded, false);
+            end
+            if id ~= 'vanahub' then imgui.SameLine(); end
+            if imgui.SmallButton('Uninstall##' .. id) then start_uninstall(id); end
+            if busy then imgui.EndDisabled(); end
         end
-        local revocation = state.revocations[package.sha256];
-        if revocation ~= nil then
-            imgui.TextColored({ 1.0, 0.25, 0.2, 1.0 }, 'REVOKED: ' .. tostring(revocation.reason));
-        end
-        local busy = state.operation ~= nil or state.addon_action ~= nil;
-        if busy then imgui.BeginDisabled(true); end
-        if id ~= 'vanahub' and imgui.SmallButton((loaded and 'Disable##' or 'Enable##') .. id) then
-            set_addon_enabled(id, not loaded);
-        end
-        if id ~= 'vanahub' then imgui.SameLine(); end
-        if imgui.SmallButton('Uninstall##' .. id) then start_uninstall(id); end
-        if busy then imgui.EndDisabled(); end
     end
     if not any then imgui.TextDisabled('No managed addons are installed.'); end
     imgui.Separator(); imgui.TextDisabled('Uninstall preserves configuration and untracked files.');
@@ -543,13 +701,16 @@ end
 
 ashita.fs.create_directory(config_root);
 load_state();
+save_state();
 local version_root = addon.path .. 'versions\\' .. (addon.active_version or addon.version or '0.1.0') .. '\\';
 backend.initialize(version_root, builtin.public_key);
-if backend.available and builtin.index_url ~= '' then start_repository_cache(state.repositories[1]); end
+if backend.available and builtin.index_url ~= '' then start_repository_cache(state.repositories[1]);
+else state.startup.ready = true; end
 
 ashita.events.register('d3d_present', 'vanahub_render', function ()
     tick_operation();
     tick_addon_action();
+    tick_startup();
     tick_media();
     if not state.visible[1] then return; end
     imgui.SetNextWindowSize({ 800, 560 }, ImGuiCond_FirstUseEver);
