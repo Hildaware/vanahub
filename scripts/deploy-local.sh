@@ -5,7 +5,7 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 repo_root="$(cd "${script_dir}/.." && pwd -P)"
 build_dir="${repo_root}/build/win32"
-package_dir="${build_dir}/package/addons/vanahub"
+package_dir="${repo_root}/dist/ffxi/addons/vanahub"
 default_addons_root="/Users/bferrari/Games/FFXI/HorizonXI/addons"
 addons_root="${1:-${VANAHUB_ADDONS_ROOT:-${default_addons_root}}}"
 

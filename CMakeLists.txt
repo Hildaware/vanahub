@@ -70,16 +70,19 @@ if(VH_BUILD_ENGINE)
             COMMENT "Stripping Win32 release symbols")
     endif()
 
-    set(VH_PACKAGE_DIR "${CMAKE_BINARY_DIR}/package/addons/vanahub")
-    add_custom_target(vanahub_package
-        COMMAND ${CMAKE_COMMAND} -E rm -rf "${CMAKE_BINARY_DIR}/package"
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${VH_PACKAGE_DIR}"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/addon/vanahub" "${VH_PACKAGE_DIR}"
+    set(VH_DIST_ROOT "${CMAKE_SOURCE_DIR}/dist/ffxi" CACHE PATH
+        "Stable output root for the deployable FFXI runtime")
+    set(VH_PACKAGE_DIR "${VH_DIST_ROOT}/addons/vanahub")
+    add_custom_target(vanahub_package ALL
+        COMMAND ${CMAKE_COMMAND}
+            -DSOURCE_DIR=${CMAKE_SOURCE_DIR}/addon/vanahub
+            -DDEST_DIR=${VH_PACKAGE_DIR}
+            -P ${CMAKE_SOURCE_DIR}/cmake/publish-addon.cmake
         COMMAND ${CMAKE_COMMAND} -E make_directory "${VH_PACKAGE_DIR}/versions/0.1.0/bin"
         COMMAND ${CMAKE_COMMAND} -E rm -f "${VH_PACKAGE_DIR}/versions/0.1.0/bin/.gitkeep"
         COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:vanahub_engine>" "${VH_PACKAGE_DIR}/versions/0.1.0/bin/vanahub_engine.dll"
         DEPENDS vanahub_engine
-        COMMENT "Assembling the Ashita addon package")
+        COMMENT "Publishing the Ashita addon to ${VH_PACKAGE_DIR}")
 endif()
 
 if(VH_BUILD_TESTS)
@@ -93,7 +96,7 @@ if(VH_BUILD_TESTS)
     if(VH_BUILD_ENGINE)
         add_executable(vanahub_engine_tests tests/native/engine_tests.cpp)
         target_include_directories(vanahub_engine_tests PRIVATE native/include)
-        target_link_libraries(vanahub_engine_tests PRIVATE vanahub_engine)
+        target_link_libraries(vanahub_engine_tests PRIVATE vanahub_engine bcrypt)
         if(MINGW)
             target_link_options(vanahub_engine_tests PRIVATE -static -static-libgcc -static-libstdc++)
         endif()

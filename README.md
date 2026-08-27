@@ -28,7 +28,9 @@ cmake -S . -B build/win32 -G Ninja \
 cmake --build build/win32 --target vanahub_package
 ```
 
-The result is `build/win32/package/addons/vanahub`. The built-in catalog is
+The result is always published to `dist/ffxi/addons/vanahub`, independent of
+the CMake build directory. This is the directory to share with a Steam Deck
+using Syncthing. The built-in catalog is
 pinned to its GitHub Pages index and Ed25519 verification key in
 `addon/vanahub/versions/0.1.0/builtin.lua`.
 At runtime, VanaHub loads its last verified catalog cache immediately and

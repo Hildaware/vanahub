@@ -442,7 +442,8 @@ bool inspect_and_extract(job& current, const fs::path& archive, const fs::path& 
         const auto is_directory = mz_zip_reader_entry_is_dir(reader) == MZ_OK;
         std::string reason;
         if (!vanahub::is_safe_relative_path(name, &reason)) { error = "Unsafe ZIP path: " + name + " (" + reason + ")"; break; }
-        if (mz_zip_attrib_is_symlink(info->external_fa, info->version_madeby) == MZ_OK || info->linkname != nullptr) {
+        if (mz_zip_attrib_is_symlink(info->external_fa, info->version_madeby) == MZ_OK ||
+            (info->linkname != nullptr && *info->linkname != '\0')) {
             error = "ZIP symlinks are prohibited"; break;
         }
         if ((info->flag & MZ_ZIP_FLAG_ENCRYPTED) != 0) { error = "Encrypted ZIP entries are prohibited"; break; }

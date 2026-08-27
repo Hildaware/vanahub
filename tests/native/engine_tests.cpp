@@ -1,10 +1,17 @@
 #include "vanahub/api.h"
 
+#include <windows.h>
+#include <bcrypt.h>
+
+#include <array>
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -36,6 +43,74 @@ void write(const std::filesystem::path& path, const std::string& value) {
     std::ofstream output(path, std::ios::binary | std::ios::trunc);
     output << value;
     expect(output.good(), "fixture write");
+}
+
+void append_u16(std::vector<std::uint8_t>& output, std::uint16_t value) {
+    output.push_back(static_cast<std::uint8_t>(value));
+    output.push_back(static_cast<std::uint8_t>(value >> 8));
+}
+
+void append_u32(std::vector<std::uint8_t>& output, std::uint32_t value) {
+    append_u16(output, static_cast<std::uint16_t>(value));
+    append_u16(output, static_cast<std::uint16_t>(value >> 16));
+}
+
+std::uint32_t crc32(std::string_view value) {
+    std::uint32_t crc = 0xffffffffu;
+    for (const auto byte : value) {
+        crc ^= static_cast<std::uint8_t>(byte);
+        for (int bit = 0; bit < 8; ++bit) crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1u)));
+    }
+    return ~crc;
+}
+
+void append_text(std::vector<std::uint8_t>& output, std::string_view value) {
+    output.insert(output.end(), value.begin(), value.end());
+}
+
+void write_regular_file_zip(const std::filesystem::path& path) {
+    constexpr std::string_view name = "sample/sample.lua";
+    constexpr std::string_view contents = "return true\n";
+    const auto checksum = crc32(contents);
+    std::vector<std::uint8_t> archive;
+    append_u32(archive, 0x04034b50); append_u16(archive, 20); append_u16(archive, 0); append_u16(archive, 0);
+    append_u16(archive, 0); append_u16(archive, 0); append_u32(archive, checksum);
+    append_u32(archive, contents.size()); append_u32(archive, contents.size());
+    append_u16(archive, name.size()); append_u16(archive, 0); append_text(archive, name); append_text(archive, contents);
+    const auto central_offset = static_cast<std::uint32_t>(archive.size());
+    append_u32(archive, 0x02014b50); append_u16(archive, 0x0314); append_u16(archive, 20);
+    append_u16(archive, 0); append_u16(archive, 0); append_u16(archive, 0); append_u16(archive, 0);
+    append_u32(archive, checksum); append_u32(archive, contents.size()); append_u32(archive, contents.size());
+    append_u16(archive, name.size()); append_u16(archive, 0); append_u16(archive, 0); append_u16(archive, 0);
+    append_u16(archive, 0); append_u32(archive, 0100644u << 16); append_u32(archive, 0); append_text(archive, name);
+    const auto central_size = static_cast<std::uint32_t>(archive.size()) - central_offset;
+    append_u32(archive, 0x06054b50); append_u16(archive, 0); append_u16(archive, 0);
+    append_u16(archive, 1); append_u16(archive, 1); append_u32(archive, central_size);
+    append_u32(archive, central_offset); append_u16(archive, 0);
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    output.write(reinterpret_cast<const char*>(archive.data()), static_cast<std::streamsize>(archive.size()));
+    expect(output.good(), "ZIP fixture write");
+}
+
+std::string sha256(const std::filesystem::path& path) {
+    BCRYPT_ALG_HANDLE algorithm{}; BCRYPT_HASH_HANDLE hash{}; DWORD object_size{}, received{};
+    expect(BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) >= 0, "SHA-256 provider");
+    expect(BCryptGetProperty(algorithm, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&object_size),
+        sizeof(object_size), &received, 0) >= 0, "SHA-256 object size");
+    std::vector<std::uint8_t> object(object_size); std::array<std::uint8_t, 32> digest{};
+    expect(BCryptCreateHash(algorithm, &hash, object.data(), object_size, nullptr, 0, 0) >= 0, "SHA-256 hash");
+    std::ifstream input(path, std::ios::binary); std::array<char, 4096> buffer{};
+    while (input) {
+        input.read(buffer.data(), buffer.size());
+        if (input.gcount() > 0) expect(BCryptHashData(hash, reinterpret_cast<PUCHAR>(buffer.data()),
+            static_cast<ULONG>(input.gcount()), 0) >= 0, "SHA-256 data");
+    }
+    expect(input.eof() && BCryptFinishHash(hash, digest.data(), digest.size(), 0) >= 0, "SHA-256 finish");
+    BCryptDestroyHash(hash); BCryptCloseAlgorithmProvider(algorithm, 0);
+    std::ostringstream output;
+    for (const auto byte : digest) output << std::hex << std::setw(2) << std::setfill('0') << static_cast<unsigned>(byte);
+    return output.str();
 }
 }
 
@@ -85,6 +160,19 @@ int main() {
     std::ifstream pointer(repository / "current");
     std::string active; pointer >> active;
     expect(active == valid_digest, "cache pointer recovers to verified generation");
+
+    const auto archive = root / "regular-file.zip";
+    write_regular_file_zip(archive);
+    const auto install_job = vh_job_start(engine,
+        ("{\"operation\":\"install\",\"packageId\":\"sample\",\"url\":\"file:///" +
+         archive.generic_string() + "\",\"sha256\":\"" + sha256(archive) +
+         "\",\"archiveRoot\":\"sample\",\"entrypoint\":\"sample.lua\","
+         "\"allowElevated\":false,\"allowLocal\":true,\"githubOnly\":false}").c_str());
+    expect(install_job != 0, "install job creation");
+    status = wait_for(engine, install_job);
+    expect(status.find("\"result\":0") != std::string::npos, "regular ZIP entry is not treated as a symlink");
+    expect(std::filesystem::exists(root / "addons" / "sample" / "sample.lua"), "addon entrypoint installed");
+    vh_job_release(engine, install_job);
 
     write(valid / "index.json", "tampered");
     const auto tampered = vh_job_start(engine,

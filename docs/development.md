@@ -26,7 +26,11 @@ cmake -S . -B build/win32 -G Ninja \
 cmake --build build/win32 --target vanahub_package
 ```
 
-The deployable tree is written to `build/win32/package/addons/vanahub`.
+The deployable tree is always published to `dist/ffxi/addons/vanahub`, even
+when a different CMake build directory is used. Because this directory contains
+only the assembled FFXI addon runtime, it can be used directly as a Syncthing
+folder with the Deck's `addons/vanahub` directory as the destination. Package
+rebuilds preserve Syncthing's `.stfolder` marker and an optional `.stignore`.
 Configure `addon/vanahub/versions/0.1.0/builtin.lua` only after the separate
 catalog repository and its Ed25519 key have been created.
 
