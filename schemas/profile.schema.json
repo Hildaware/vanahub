@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/vanahub/profile.schema.json",
+  "title": "VanaHub portable profile manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "profile"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "addons"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "addons": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "autoLoad", "source", "settings"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{1,63}$" },
+              "autoLoad": { "type": "boolean" },
+              "version": { "type": "string", "maxLength": 80 },
+              "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+              "settings": { "type": "boolean" },
+              "source": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["builtin"],
+                    "properties": { "builtin": { "const": true } }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["builtin", "url"],
+                    "properties": {
+                      "builtin": { "const": false },
+                      "name": { "type": "string", "maxLength": 200 },
+                      "url": { "type": "string", "pattern": "^https://", "maxLength": 2048 }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

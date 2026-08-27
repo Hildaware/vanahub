@@ -35,6 +35,22 @@ over the client's public-host HTTPS policy, hash-verified, size-limited, and
 cached before Direct3D loads it. Missing or rejected icons use a local rendered
 placeholder; custom-repository media is not decoded.
 
+Portable profile archives are untrusted and unsigned. Before displaying an
+import review, the native engine enforces bounded ZIP expansion, safe relative
+paths, unique case-folded entries, supported compression, and no encryption,
+links, reparse points, or nested archives. Every settings file is inspected by
+content: Lua uses the restricted scanner, executable and script signatures are
+blocked regardless of extension, recognized media uses magic bytes, unknown
+text remains portable, and unknown binary data is rejected. These checks do
+not prove that arbitrary text values are harmless to every consuming addon, so
+the UI requires sender trust and explicit approval for carried custom sources.
+
+Settings restoration is transactional per addon. Loaded addons must unload,
+the existing configuration is moved into a recoverable backup, and an
+interrupted commit is recovered by the native transaction journal. VanaHub's
+own configuration, addon binaries, and untrusted local repository URLs are
+never included in a profile.
+
 Catalog scanning runs without the signing key. The private Ed25519 seed is
 exposed only while signing an already-built index and is stored as a protected
 GitHub environment secret; the corresponding client public key is intentionally

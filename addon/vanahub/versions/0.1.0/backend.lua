@@ -45,8 +45,10 @@ function backend.initialize(version_root, builtin_public_key)
     if tonumber(library.vh_abi_version()) ~= 1 then backend.error = 'Native engine ABI mismatch.'; return false; end
     local engine_out = ffi.new('vh_engine*[1]');
     local install_root = AshitaCore:GetInstallPath() .. '\\addons';
+    local config_root = AshitaCore:GetInstallPath() .. '\\config\\addons';
     local cache_root = AshitaCore:GetInstallPath() .. '\\config\\addons\\vanahub\\cache';
-    local config = backend.encode({ installRoot = install_root, cacheRoot = cache_root, builtinPublicKey = builtin_public_key or '' });
+    local config = backend.encode({ installRoot = install_root, configRoot = config_root,
+        cacheRoot = cache_root, builtinPublicKey = builtin_public_key or '' });
     local result = library.vh_engine_create(config, engine_out);
     if result ~= VH_OK then backend.error = 'Native engine initialization failed: ' .. tonumber(result); return false; end
     backend.library = library;

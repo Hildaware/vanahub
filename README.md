@@ -52,5 +52,29 @@ its verified local catalog-cache check finishes. Load and Unload affect only
 the current session; Auto-load changes the next startup. Ordering applies only
 to addons managed by VanaHub, not to other entries left in Ashita's scripts.
 
+Profiles can be exported as `.vanahub-profile.zip` files from the Installed
+tab. An export contains profile order and auto-load state, catalog source and
+version metadata, and optionally each addon's on-disk configuration directory;
+it never contains addon binaries or VanaHub's own configuration. Settings are
+selected per addon and scanned by content rather than by a fixed extension
+list, allowing uncommon text formats and recognized UI media while rejecting
+executables, general-purpose scripts, nested archives, unsafe Lua, links, and
+unrecognized binary data.
+The embedded manifest format is documented by
+[`schemas/profile.schema.json`](schemas/profile.schema.json).
+Exports are written to `config/addons/vanahub/profiles/exports` using the
+filename entered in the ImGui panel; VanaHub asks before replacing an existing
+archive and does not invoke a native operating-system file dialog.
+
+Import inspects the complete archive before showing a review. Missing addons
+can be installed from the current built-in release or an explicitly trusted
+custom repository carried by the profile. Existing settings are backed up and
+replaced only after affected addons unload. Unavailable or failed addons remain
+visible in the new profile with auto-load disabled. Profile files are not
+signed: only import profiles from people you trust, and inspect the review for
+private settings and custom repository URLs.
+To import, paste a full archive path into the ImGui panel, or copy the file into
+`config/addons/vanahub/profiles/imports` and enter only its filename.
+
 For the local HorizonXI installation, `make deploy-local` builds and deploys
 directly to `/Users/bferrari/Games/FFXI/HorizonXI/addons/vanahub`.

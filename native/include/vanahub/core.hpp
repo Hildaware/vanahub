@@ -32,6 +32,7 @@ bool is_safe_package_id(std::string_view value);
 bool is_allowed_extension(std::string_view value);
 std::string ascii_casefold(std::string_view value);
 std::vector<finding> scan_lua(std::string_view source, std::string_view path);
+std::vector<finding> scan_setting(std::string_view contents, std::string_view path);
 std::string json_escape(std::string_view value);
 
 } // namespace vanahub

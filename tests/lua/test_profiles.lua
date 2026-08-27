@@ -14,7 +14,7 @@ local installed = {
 };
 
 local legacy = profiles.normalize(installed, installed);
-equal(legacy.schemaVersion, 2, 'legacy schema migrated');
+equal(legacy.schemaVersion, 3, 'legacy schema migrated');
 equal(legacy.activeProfileId, 'default', 'default profile selected');
 equal(legacy.profiles[1].addons[1].id, 'alpha', 'legacy addons sorted by name');
 equal(legacy.profiles[1].addons[1].autoLoad, false, 'legacy addons default off');
@@ -78,5 +78,32 @@ if restored.activeProfileId == remove_id then error('removing active profile did
 
 local singleton = profiles.normalize(nil, { });
 equal(profiles.remove(singleton, 'default'), false, 'last profile cannot be deleted');
+
+local portable = profiles.normalize({
+    schemaVersion = 3,
+    profiles = { { id = 'portable', name = 'Portable', addons = {
+        { id = 'missing-addon', autoLoad = true }, { id = 'alpha', autoLoad = true },
+    } } }, activeProfileId = 'portable',
+}, { alpha = installed.alpha, zebra = installed.zebra });
+equal(#portable.profiles[1].addons, 3, 'v3 retains unresolved addons and appends installed addons');
+equal(portable.profiles[1].addons[1].id, 'missing-addon', 'unresolved addon order retained');
+equal(portable.profiles[1].addons[1].autoLoad, false, 'unresolved addon disabled');
+
+local imported, import_error = profiles.import_profile(portable, {
+    schemaVersion = 1,
+    profile = { name = 'Portable', addons = {
+        { id = 'alpha', autoLoad = true, settings = true, source = { builtin = true } },
+        { id = 'another-missing', autoLoad = true, settings = false, source = { builtin = true } },
+    } },
+});
+equal(import_error, nil, 'valid portable profile imported');
+equal(imported.name, 'Portable 2', 'imported profile name made unique');
+equal(imported.addons[1].autoLoad, true, 'installed imported addon retains auto-load');
+equal(imported.addons[2].id, 'another-missing', 'unresolved imported addon retained');
+equal(imported.addons[2].autoLoad, false, 'unresolved imported addon disabled');
+equal(profiles.import_profile(portable, { schemaVersion = 2 }), nil, 'invalid portable manifest rejected');
+equal(profiles.import_profile(portable, { schemaVersion = 1,
+    profile = { name = 'Bad', addons = { { id = '../bad', autoLoad = true,
+        settings = false, source = { builtin = true } } } } }), nil, 'unsafe imported addon id rejected');
 
 print('profile tests passed');

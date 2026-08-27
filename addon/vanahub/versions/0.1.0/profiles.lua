@@ -6,6 +6,9 @@ local function copy_addons(addons, preserve_auto_load)
         result[#result + 1] = {
             id = entry.id,
             autoLoad = preserve_auto_load and entry.autoLoad == true or false,
+            source = entry.source,
+            version = entry.version,
+            sha256 = entry.sha256,
         };
     end
     return result;
@@ -24,12 +27,32 @@ local function sorted_installed_ids(installed)
     return ids;
 end
 
-local function normalize_addons(addons, installed)
+local function safe_id(value)
+    return type(value) == 'string' and #value >= 2 and #value <= 64
+        and value:match('^[a-z0-9][a-z0-9._-]+$') ~= nil;
+end
+
+local function normalize_addons(addons, installed, retain_missing)
     local result, seen = { }, { };
     for _, entry in ipairs(type(addons) == 'table' and addons or { }) do
         local id = type(entry) == 'table' and entry.id or nil;
-        if type(id) == 'string' and installed[id] ~= nil and not seen[id] then
-            result[#result + 1] = { id = id, autoLoad = id ~= 'vanahub' and entry.autoLoad == true };
+        if safe_id(id) and (installed[id] ~= nil or retain_missing) and not seen[id] then
+            local normalized = {
+                id = id,
+                autoLoad = installed[id] ~= nil and id ~= 'vanahub' and entry.autoLoad == true,
+            };
+            if type(entry.version) == 'string' and #entry.version <= 80 then normalized.version = entry.version; end
+            if type(entry.sha256) == 'string' and #entry.sha256 == 64
+                and entry.sha256:match('^[a-f0-9]+$') ~= nil then normalized.sha256 = entry.sha256; end
+            if type(entry.source) == 'table' and type(entry.source.builtin) == 'boolean' then
+                if entry.source.builtin == true then normalized.source = { builtin = true };
+                elseif type(entry.source.url) == 'string' and #entry.source.url <= 2048
+                    and entry.source.url:match('^https://') ~= nil then
+                    normalized.source = { builtin = false, url = entry.source.url,
+                        name = type(entry.source.name) == 'string' and entry.source.name or nil };
+                end
+            end
+            result[#result + 1] = normalized;
             seen[id] = true;
         end
     end
@@ -60,13 +83,14 @@ end
 
 function profiles.normalize(raw, installed)
     local document = {
-        schemaVersion = 2,
+        schemaVersion = 3,
         installed = installed or { },
         profiles = { },
         activeProfileId = nil,
     };
-    local source_profiles = type(raw) == 'table' and raw.schemaVersion == 2
+    local source_profiles = type(raw) == 'table' and (raw.schemaVersion == 2 or raw.schemaVersion == 3)
         and type(raw.profiles) == 'table' and raw.profiles or { };
+    local retain_missing = type(raw) == 'table' and raw.schemaVersion == 3;
     local used_ids, used_names = { }, { };
     for _, source in ipairs(source_profiles) do
         if type(source) == 'table' then
@@ -76,7 +100,7 @@ function profiles.normalize(raw, installed)
                 document.profiles[#document.profiles + 1] = {
                     id = id,
                     name = name,
-                    addons = normalize_addons(source.addons, document.installed),
+                    addons = normalize_addons(source.addons, document.installed, retain_missing),
                 };
                 used_ids[id], used_names[name:lower()] = true, true;
             end
@@ -95,6 +119,61 @@ function profiles.normalize(raw, installed)
     end
     document.activeProfileId = document.activeProfileId or document.profiles[1].id;
     return document;
+end
+
+function profiles.import_profile(document, raw)
+    local valid, error = profiles.validate_import(raw);
+    if not valid then return nil, error; end
+    local source = raw.profile;
+    local requested_name = type(source.name) == 'string' and source.name or 'Imported Profile';
+    local profile = {
+        id = next_id(document),
+        name = unique_name(document, requested_name),
+        addons = normalize_addons(source.addons, document.installed or { }, true),
+    };
+    for _, entry in ipairs(profile.addons) do
+        if (document.installed or { })[entry.id] == nil then entry.autoLoad = false; end
+    end
+    document.profiles[#document.profiles + 1] = profile;
+    document.activeProfileId = profile.id;
+    return profile;
+end
+
+function profiles.validate_import(raw)
+    if type(raw) ~= 'table' or raw.schemaVersion ~= 1 or type(raw.profile) ~= 'table'
+        or type(raw.profile.addons) ~= 'table' or #raw.profile.addons > 256 then
+        return false, 'Profile archive manifest is invalid.';
+    end
+    if type(raw.profile.name) ~= 'string' or raw.profile.name:match('^%s*(.-)%s*$') == ''
+        or #raw.profile.name > 80 or raw.profile.name:find('[%z\1-\31]') ~= nil then
+        return false, 'Imported profile name is invalid.';
+    end
+    local seen = { };
+    for _, entry in ipairs(raw.profile.addons) do
+        if type(entry) ~= 'table' or not safe_id(entry.id) or seen[entry.id] then
+            return false, 'Imported profile contains an invalid or duplicate addon id.';
+        end
+        if type(entry.autoLoad) ~= 'boolean' or type(entry.settings) ~= 'boolean'
+            or type(entry.source) ~= 'table' or type(entry.source.builtin) ~= 'boolean' then
+            return false, 'Imported addon options are invalid.';
+        end
+        seen[entry.id] = true;
+        if entry.version ~= nil and (type(entry.version) ~= 'string' or #entry.version > 80) then
+            return false, 'Imported addon version is invalid.';
+        end
+        if entry.sha256 ~= nil and (type(entry.sha256) ~= 'string'
+            or entry.sha256:match('^[a-f0-9]+$') == nil or #entry.sha256 ~= 64) then
+            return false, 'Imported addon hash is invalid.';
+        end
+        if entry.source.builtin ~= true and (type(entry.source.url) ~= 'string'
+            or #entry.source.url > 2048 or entry.source.url:match('^https://') == nil) then
+            return false, 'Imported custom repository URL is invalid.';
+        end
+        if entry.source.name ~= nil and (type(entry.source.name) ~= 'string' or #entry.source.name > 200) then
+            return false, 'Imported repository name is invalid.';
+        end
+    end
+    return true;
 end
 
 function profiles.active(document)
@@ -145,7 +224,8 @@ function profiles.remove(document, profile_id)
     return false, 'Profile not found.';
 end
 
-function profiles.add_installed(document, package_id)
+function profiles.add_installed(document, package_id, enable_active)
+    if enable_active == nil then enable_active = true; end
     for _, profile in ipairs(document.profiles) do
         local found = false;
         for _, entry in ipairs(profile.addons) do
@@ -154,7 +234,7 @@ function profiles.add_installed(document, package_id)
         if not found then
             profile.addons[#profile.addons + 1] = {
                 id = package_id,
-                autoLoad = package_id ~= 'vanahub' and profile.id == document.activeProfileId,
+                autoLoad = enable_active and package_id ~= 'vanahub' and profile.id == document.activeProfileId,
             };
         end
     end

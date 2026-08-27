@@ -526,6 +526,7 @@ std::vector<std::string> read_ownership(const fs::path& root) {
 
 struct vh_engine {
     fs::path install_root;
+    fs::path config_root;
     fs::path cache_root;
     std::string builtin_public_key;
     std::atomic<vh_job_id> next_id{1};
@@ -538,6 +539,168 @@ struct vh_engine {
 };
 
 namespace {
+
+std::vector<std::string> split_ids(const std::string& value) {
+    std::vector<std::string> result;
+    std::size_t start{};
+    while (start <= value.size()) {
+        const auto end = value.find(';', start);
+        const auto id = value.substr(start, end == std::string::npos ? std::string::npos : end - start);
+        if (!id.empty() && vanahub::is_safe_package_id(id) && id != "vanahub") result.push_back(id);
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+    return result;
+}
+
+fs::path config_directory(const fs::path& root, const std::string& package_id) {
+    std::error_code ec;
+    const auto folded = vanahub::ascii_casefold(package_id);
+    for (const auto& item : fs::directory_iterator(root, fs::directory_options::skip_permission_denied, ec)) {
+        if (item.is_directory(ec) && vanahub::ascii_casefold(item.path().filename().string()) == folded)
+            return item.path();
+        ec.clear();
+    }
+    return root / widen(package_id);
+}
+
+bool read_setting(const fs::path& path, std::string& contents, std::string& error) {
+    std::error_code ec;
+    const auto size = fs::file_size(path, ec);
+    if (ec || size > 32ull * 1024 * 1024) { error = "Settings file exceeds the size limit"; return false; }
+    std::ifstream input(path, std::ios::binary);
+    if (!input) { error = "Could not open settings file"; return false; }
+    contents.assign(std::istreambuf_iterator<char>(input), {});
+    if (input.bad()) { error = "Could not read settings file"; return false; }
+    return true;
+}
+
+bool scan_setting_file(const fs::path& path, const std::string& relative, std::string& error) {
+    std::string contents;
+    if (!read_setting(path, contents, error)) return false;
+    const auto findings = vanahub::scan_setting(contents, relative);
+    if (!findings.empty()) { error = findings.front().message + ": " + relative; return false; }
+    return true;
+}
+
+bool export_profile(vh_engine* engine, job& current, const fs::path& manifest,
+                    const fs::path& output, const std::vector<std::string>& package_ids,
+                    std::string& error) {
+    std::string manifest_contents;
+    if (!read_setting(manifest, manifest_contents, error) || manifest_contents.size() > 2ull * 1024 * 1024 ||
+        manifest_contents.find('\0') != std::string::npos) {
+        if (error.empty()) error = "Profile manifest is invalid";
+        return false;
+    }
+    const auto partial = output.parent_path() / (output.filename().wstring() + L".part");
+    std::error_code ec; fs::create_directories(output.parent_path(), ec); fs::remove(partial, ec);
+    void* writer = mz_zip_writer_create();
+    if (!writer || mz_zip_writer_open_file(writer, partial.string().c_str(), 0, 0) != MZ_OK) {
+        if (writer) mz_zip_writer_delete(&writer); error = "Could not create profile archive"; return false;
+    }
+    mz_zip_file manifest_info{}; manifest_info.filename = "profile.json";
+    manifest_info.compression_method = MZ_COMPRESS_METHOD_DEFLATE;
+    if (mz_zip_writer_add_buffer(writer, manifest_contents.data(), static_cast<int32_t>(manifest_contents.size()), &manifest_info) != MZ_OK) {
+        error = "Could not write profile manifest";
+    }
+    std::uint64_t expanded = manifest_contents.size(); std::size_t files = 1;
+    for (const auto& id : package_ids) {
+        const auto directory = config_directory(engine->config_root, id);
+        if (!error.empty() || !fs::is_directory(directory, ec)) { ec.clear(); continue; }
+        for (fs::recursive_directory_iterator it(directory, fs::directory_options::skip_permission_denied, ec), end;
+             !ec && it != end; ++it) {
+            if (current.cancel.load()) { error = "Cancelled"; break; }
+            const auto attributes = GetFileAttributesW(it->path().c_str());
+            if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+                error = "Reparse points cannot be exported: " + it->path().filename().string(); break;
+            }
+            if (!it->is_regular_file(ec)) continue;
+            const auto relative = fs::relative(it->path(), directory, ec).generic_string();
+            std::string reason;
+            if (ec || !vanahub::is_safe_relative_path(relative, &reason)) { error = "Unsafe settings path"; break; }
+            if (!scan_setting_file(it->path(), relative, error)) break;
+            const auto size = it->file_size(ec); expanded += size; ++files;
+            if (ec || expanded > 256ull * 1024 * 1024 || files > 10000) { error = "Profile settings limits exceeded"; break; }
+            const auto archived = "settings/" + id + "/" + relative;
+            if (mz_zip_writer_add_file(writer, it->path().string().c_str(), archived.c_str()) != MZ_OK) {
+                error = "Could not archive settings file: " + relative; break;
+            }
+            current.completed = files;
+        }
+        if (!error.empty()) break;
+    }
+    mz_zip_writer_close(writer); mz_zip_writer_delete(&writer);
+    if (!error.empty()) { fs::remove(partial, ec); return false; }
+    if (!MoveFileExW(partial.c_str(), output.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        fs::remove(partial, ec); error = "Could not commit profile archive"; return false;
+    }
+    return true;
+}
+
+bool inspect_profile(job& current, const fs::path& archive, const fs::path& staging, std::string& error) {
+    std::error_code ec;
+    if (!fs::is_regular_file(archive, ec) || fs::file_size(archive, ec) > 64ull * 1024 * 1024) {
+        error = "Profile archive is missing or too large"; return false;
+    }
+    void* reader = mz_zip_reader_create();
+    if (!reader || mz_zip_reader_open_file(reader, archive.string().c_str()) != MZ_OK) {
+        if (reader) mz_zip_reader_delete(&reader); error = "Unable to open profile archive"; return false;
+    }
+    std::set<std::string> destinations; std::uint64_t expanded{}; std::size_t entries{}; bool manifest{};
+    auto code = mz_zip_reader_goto_first_entry(reader);
+    while (code == MZ_OK) {
+        mz_zip_file* info{};
+        if (mz_zip_reader_entry_get_info(reader, &info) != MZ_OK || !info || !info->filename) { error = "Invalid profile entry"; break; }
+        std::string name(info->filename); while (!name.empty() && name.back() == '/') name.pop_back();
+        if (name.empty()) { code = mz_zip_reader_goto_next_entry(reader); continue; }
+        std::string reason;
+        if (!vanahub::is_safe_relative_path(name, &reason) ||
+            mz_zip_attrib_is_symlink(info->external_fa, info->version_madeby) == MZ_OK ||
+            (info->linkname && *info->linkname) || (info->flag & MZ_ZIP_FLAG_ENCRYPTED) != 0) {
+            error = "Unsafe profile archive entry: " + name; break;
+        }
+        if (info->compression_method != MZ_COMPRESS_METHOD_STORE &&
+            info->compression_method != MZ_COMPRESS_METHOD_DEFLATE) {
+            error = "Unsupported profile compression method"; break;
+        }
+        const auto folded = vanahub::ascii_casefold(name);
+        if (!destinations.insert(folded).second) { error = "Duplicate or case-colliding profile entry"; break; }
+        if (folded == "profile.json") manifest = true;
+        else if (!folded.starts_with("settings/")) { error = "Unexpected profile archive entry: " + name; break; }
+        expanded += static_cast<std::uint64_t>(info->uncompressed_size); ++entries;
+        if (info->uncompressed_size > 32ll * 1024 * 1024) { error = "Profile entry size limit exceeded"; break; }
+        if (expanded > 256ull * 1024 * 1024) { error = "Profile total expansion limit exceeded"; break; }
+        if (entries > 10000) { error = "Profile entry-count limit exceeded"; break; }
+        if (info->compressed_size > 0 && info->uncompressed_size / info->compressed_size > 200) {
+            error = "Suspicious profile compression ratio"; break;
+        }
+        code = mz_zip_reader_goto_next_entry(reader);
+    }
+    if (error.empty() && !manifest) error = "Profile manifest is missing";
+    if (error.empty()) {
+        fs::remove_all(staging, ec); fs::create_directories(staging, ec);
+        code = mz_zip_reader_goto_first_entry(reader);
+        while (code == MZ_OK && !current.cancel.load()) {
+            mz_zip_file* info{}; mz_zip_reader_entry_get_info(reader, &info);
+            std::string name(info && info->filename ? info->filename : ""); while (!name.empty() && name.back() == '/') name.pop_back();
+            if (!name.empty() && mz_zip_reader_entry_is_dir(reader) != MZ_OK) {
+                const auto destination = staging / widen(name);
+                fs::create_directories(destination.parent_path(), ec);
+                if (mz_zip_reader_entry_save_file(reader, destination.string().c_str()) != MZ_OK) { error = "Profile extraction failed"; break; }
+                if (vanahub::ascii_casefold(name) == "profile.json") {
+                    std::string text;
+                    if (!read_setting(destination, text, error) || text.size() > 2ull * 1024 * 1024 || text.find('\0') != std::string::npos)
+                        error = "Profile manifest is invalid";
+                } else if (!scan_setting_file(destination, name, error)) break;
+            }
+            code = mz_zip_reader_goto_next_entry(reader);
+        }
+    }
+    mz_zip_reader_close(reader); mz_zip_reader_delete(&reader);
+    if (current.cancel.load()) error = "Cancelled";
+    if (!error.empty()) fs::remove_all(staging, ec);
+    return error.empty();
+}
 
 void execute_job(vh_engine* engine, const std::shared_ptr<job>& current, std::string request) {
     const auto operation = json_string(request, "operation");
@@ -637,6 +800,92 @@ void execute_job(vh_engine* engine, const std::shared_ptr<job>& current, std::st
             fs::remove(partial, ec); current->finish(VH_FILESYSTEM_ERROR, "Could not activate catalog media cache"); return;
         }
         current->finish(VH_OK, destination.generic_string()); return;
+    }
+
+    if (operation == "exportProfile") {
+        std::scoped_lock mutation(engine->mutation_mutex);
+        const auto manifest = fs::path(widen(json_string(request, "manifestPath")));
+        const auto output = fs::path(widen(json_string(request, "outputPath")));
+        const auto ids = split_ids(json_string(request, "packageIds"));
+        if (manifest.empty() || output.empty()) { current->finish(VH_INVALID_ARGUMENT, "Profile export paths are required"); return; }
+        current->update("scanning", "Scanning addon settings");
+        std::string error;
+        if (!export_profile(engine, *current, manifest, output, ids, error)) {
+            current->finish(current->cancel.load() ? VH_CANCELLED : VH_SCAN_REJECTED, error); return;
+        }
+        current->finish(VH_OK, output.generic_string()); return;
+    }
+
+    if (operation == "inspectProfile") {
+        std::scoped_lock mutation(engine->mutation_mutex);
+        const auto input = fs::path(widen(json_string(request, "inputPath")));
+        const auto staging = engine->cache_root / L"profile-imports" / std::to_wstring(current->id);
+        if (input.empty()) { current->finish(VH_INVALID_ARGUMENT, "Profile import path is required"); return; }
+        current->update("inspecting", "Inspecting and scanning profile settings");
+        std::string error;
+        if (!inspect_profile(*current, input, staging, error)) {
+            current->finish(current->cancel.load() ? VH_CANCELLED : VH_SCAN_REJECTED, error); return;
+        }
+        current->finish(VH_OK, staging.generic_string()); return;
+    }
+
+    if (operation == "restoreProfileSettings") {
+        std::scoped_lock mutation(engine->mutation_mutex);
+        if (package_id == "vanahub") { current->finish(VH_INVALID_ARGUMENT, "VanaHub settings cannot be imported"); return; }
+        const auto staging = fs::path(widen(json_string(request, "stagingPath")));
+        const auto imports_root = fs::weakly_canonical(engine->cache_root / L"profile-imports");
+        const auto canonical_staging = fs::weakly_canonical(staging);
+        auto relative_staging = canonical_staging.lexically_relative(imports_root);
+        if (staging.empty() || relative_staging.empty() || relative_staging.native().starts_with(L"..")) {
+            current->finish(VH_INVALID_ARGUMENT, "Invalid profile staging path"); return;
+        }
+        const auto source = canonical_staging / L"settings" / widen(package_id);
+        if (!fs::is_directory(source)) { current->finish(VH_NOT_FOUND, "No settings were exported for this addon"); return; }
+        const auto target = config_directory(engine->config_root, package_id);
+        const auto transaction = engine->cache_root / L"transactions" / std::to_wstring(current->id);
+        const auto transaction_backup = transaction / L"backup";
+        const auto backup = engine->config_root / L"vanahub" / L"backups" /
+            std::to_wstring(current->id) / target.filename();
+        const auto temporary = engine->config_root / (widen(package_id) + L".vanahub-import");
+        std::error_code ec;
+        fs::remove_all(temporary, ec); fs::remove_all(transaction, ec); ec.clear();
+        fs::copy(source, temporary, fs::copy_options::recursive, ec);
+        if (ec) { fs::remove_all(temporary, ec); current->finish(VH_FILESYSTEM_ERROR, "Could not stage imported settings"); return; }
+        fs::create_directories(transaction, ec);
+        { std::ofstream journal(transaction / L"transaction.json", std::ios::binary | std::ios::trunc);
+          journal << "{\"kind\":\"settings\",\"packageId\":\"" << vanahub::json_escape(package_id) << "\"}\n"; }
+        current->update("backing_up", "Backing up existing addon settings");
+        if (fs::exists(target)) {
+            fs::rename(target, transaction_backup, ec);
+            if (ec) { fs::remove_all(temporary, ec); fs::remove_all(transaction, ec);
+                current->finish(VH_FILESYSTEM_ERROR, "Could not back up existing settings"); return; }
+        }
+        current->update("committing", "Restoring imported addon settings");
+        fs::rename(temporary, target, ec);
+        if (ec) {
+            std::error_code rollback_ec; fs::remove_all(temporary, rollback_ec);
+            if (fs::exists(transaction_backup)) fs::rename(transaction_backup, target, rollback_ec);
+            fs::remove_all(transaction, rollback_ec);
+            current->finish(VH_FILESYSTEM_ERROR, "Settings restore failed; previous settings were restored"); return;
+        }
+        if (fs::exists(transaction_backup)) {
+            fs::create_directories(backup.parent_path(), ec); fs::rename(transaction_backup, backup, ec);
+        }
+        fs::remove_all(transaction, ec);
+        current->finish(VH_OK, fs::exists(backup) ? backup.generic_string() : std::string{}); return;
+    }
+
+    if (operation == "discardProfileImport") {
+        std::scoped_lock mutation(engine->mutation_mutex);
+        const auto staging = fs::path(widen(json_string(request, "stagingPath")));
+        const auto imports_root = fs::weakly_canonical(engine->cache_root / L"profile-imports");
+        const auto canonical_staging = fs::weakly_canonical(staging);
+        const auto relative = canonical_staging.lexically_relative(imports_root);
+        if (staging.empty() || relative.empty() || relative.native().starts_with(L"..")) {
+            current->finish(VH_INVALID_ARGUMENT, "Invalid profile staging path"); return;
+        }
+        std::error_code ec; fs::remove_all(canonical_staging, ec);
+        current->finish(ec ? VH_FILESYSTEM_ERROR : VH_OK, ec ? "Could not remove profile staging files" : ""); return;
     }
 
     std::scoped_lock mutation(engine->mutation_mutex);
@@ -748,11 +997,13 @@ vh_result VH_CALL vh_engine_create(const char* config_json, vh_engine** output) 
     if (!config_json || !output) return VH_INVALID_ARGUMENT;
     const std::string config(config_json);
     const auto install = json_string(config, "installRoot");
+    const auto settings = json_string(config, "configRoot");
     const auto cache = json_string(config, "cacheRoot");
-    if (install.empty() || cache.empty()) return VH_INVALID_ARGUMENT;
+    if (install.empty() || settings.empty() || cache.empty()) return VH_INVALID_ARGUMENT;
     try {
         auto engine = std::make_unique<vh_engine>();
         engine->install_root = fs::path(widen(install));
+        engine->config_root = fs::path(widen(settings));
         engine->cache_root = fs::path(widen(cache));
         engine->builtin_public_key = json_string(config, "builtinPublicKey");
         fs::create_directories(engine->install_root);
@@ -772,9 +1023,20 @@ vh_result VH_CALL vh_engine_recover(vh_engine* engine) {
         const std::string journal((std::istreambuf_iterator<char>(input)), {});
         const auto package_id = json_string(journal, "packageId");
         if (vanahub::is_safe_package_id(package_id)) {
-            const auto target = engine->install_root / widen(package_id);
             const auto backup = item.path() / L"backup";
-            if (!fs::exists(target) && fs::exists(backup)) fs::rename(backup, target, ec);
+            if (json_string(journal, "kind") == "settings") {
+                const auto target = config_directory(engine->config_root, package_id);
+                if (!fs::exists(target) && fs::exists(backup)) fs::rename(backup, target, ec);
+                else if (fs::exists(target) && fs::exists(backup)) {
+                    const auto retained = engine->config_root / L"vanahub" / L"backups" /
+                        (L"recovered-" + item.path().filename().wstring()) / target.filename();
+                    fs::create_directories(retained.parent_path(), ec);
+                    if (!ec) fs::rename(backup, retained, ec);
+                }
+            } else {
+                const auto target = engine->install_root / widen(package_id);
+                if (!fs::exists(target) && fs::exists(backup)) fs::rename(backup, target, ec);
+            }
         }
         if (!ec) fs::remove_all(item.path(), ec);
         if (ec) return VH_FILESYSTEM_ERROR;
@@ -812,6 +1074,7 @@ void VH_CALL vh_job_release(vh_engine* engine, vh_job_id id) {
     std::shared_ptr<job> current;
     { std::scoped_lock lock(engine->jobs_mutex); const auto it = engine->jobs.find(id); if (it == engine->jobs.end()) return; current = it->second; }
     { std::scoped_lock lock(current->mutex); if (!current->terminal) return; }
+    if (current->worker.joinable()) current->worker.join();
     std::scoped_lock lock(engine->jobs_mutex); engine->jobs.erase(id);
 }
 

@@ -11,15 +11,18 @@ local profiles = require 'profiles';
 
 local install_root = AshitaCore:GetInstallPath() .. '\\addons\\';
 local config_root = AshitaCore:GetInstallPath() .. '\\config\\addons\\vanahub\\';
+local profile_root = config_root .. 'profiles\\';
+local profile_export_root = profile_root .. 'exports\\';
+local profile_import_root = profile_root .. 'imports\\';
 local state_path = config_root .. 'state.json';
 local repository_path = config_root .. 'repositories.json';
 local state = {
-    schemaVersion = 2,
+    schemaVersion = 3,
     visible = T{ false }, search = T{ '' }, selected = nil, packages = { }, installed = { },
     profiles = { }, activeProfileId = nil, profile_name = T{ '' }, profile_editor = nil,
     confirm_delete_profile = nil, repositories = { }, operation = nil, operation_context = nil, notice = nil,
     revocations = { }, addon_action = nil, startup = { ready = false, started = false },
-    media = { cache = { }, queue = { }, job = nil, request = nil },
+    media = { cache = { }, queue = { }, job = nil, request = nil }, transfer = { mode = nil },
     custom_url = T{ '' }, custom_ack = T{ false }, developer_mode = T{ false }, consent_package = nil,
 };
 
@@ -55,7 +58,7 @@ end
 local function load_state()
     local raw = decode(read_text(state_path));
     local installed = raw;
-    if type(raw) == 'table' and raw.schemaVersion == 2 then installed = raw.installed; end
+    if type(raw) == 'table' and (raw.schemaVersion == 2 or raw.schemaVersion == 3) then installed = raw.installed; end
     if type(installed) ~= 'table' then installed = { }; end
     state.installed = installed;
     for id, _ in pairs(state.installed) do
@@ -80,7 +83,7 @@ end
 
 local function save_state()
     local state_saved = write_text(state_path, encode({
-        schemaVersion = 2,
+        schemaVersion = 3,
         installed = state.installed,
         profiles = state.profiles,
         activeProfileId = state.activeProfileId,
@@ -228,6 +231,234 @@ local function tick_addon_action()
         state.notice = message;
         if action.startup then state.startup.failures[#state.startup.failures + 1] = message; end
         state.addon_action = nil;
+    end
+end
+
+local function repository_for_id(id)
+    for _, repository in ipairs(state.repositories) do if repository.id == id then return repository; end end
+    return nil;
+end
+
+local function package_for_import(entry)
+    for _, package in ipairs(state.packages) do
+        local source = entry.source or { builtin = true };
+        if package.id == entry.id and package._revocation == nil
+            and ((source.builtin == true and package._repository.builtin == true)
+                or (source.builtin ~= true and package._repository.url == source.url)) then return package; end
+    end
+    return nil;
+end
+
+local function begin_profile_export()
+    local profile = profiles.active(state);
+    local include = { };
+    for _, entry in ipairs(profile and profile.addons or { }) do
+        if entry.id ~= 'vanahub' and state.installed[entry.id] ~= nil then include[entry.id] = T{ true }; end
+    end
+    local safe_name = (profile and profile.name or 'profile'):gsub('[^%w._-]+', '-'):gsub('^-+', ''):gsub('-+$', '');
+    if safe_name == '' then safe_name = 'profile'; end
+    state.transfer = { mode = 'export', include = include,
+        filename = T{ safe_name .. '.vanahub-profile.zip' } };
+end
+
+local function start_profile_export()
+    local profile = profiles.active(state);
+    if profile == nil then return; end
+    local filename = tostring(state.transfer.filename[1] or ''):match('^%s*(.-)%s*$');
+    if filename == '' or #filename > 160 or filename:match('^[A-Za-z0-9][A-Za-z0-9._-]*$') == nil then
+        state.notice = 'Export filename may contain only letters, numbers, dots, underscores, and hyphens.'; return;
+    end
+    if filename:lower():sub(-20) ~= '.vanahub-profile.zip' then filename = filename .. '.vanahub-profile.zip'; end
+    local output = profile_export_root .. filename;
+    if ashita.fs.exists(output) and state.transfer.confirm_overwrite ~= output then
+        state.transfer.confirm_overwrite = output;
+        state.notice = 'That export already exists. Select Confirm overwrite to replace it.'; return;
+    end
+    local manifest = { schemaVersion = 1, profile = { name = profile.name, addons = { } } };
+    local ids = { };
+    for _, entry in ipairs(profile.addons) do
+        if entry.id ~= 'vanahub' then
+            local installed = state.installed[entry.id];
+            local source = entry.source or { builtin = true };
+            local repository = installed and repository_for_id(installed.source) or nil;
+            if repository ~= nil and not repository.builtin and type(repository.url) == 'string'
+                and repository.url:match('^https://') ~= nil then
+                source = { builtin = false, name = repository.name, url = repository.url };
+            elseif installed ~= nil and installed.source ~= 'builtin'
+                and (repository == nil or repository.builtin ~= true) then
+                state.notice = entry.id .. ' uses a non-portable custom repository and cannot be exported.';
+                return;
+            end
+            local include = state.transfer.include[entry.id];
+            local portable = {
+                id = entry.id, autoLoad = entry.autoLoad == true,
+                version = installed and installed.version or entry.version,
+                sha256 = installed and installed.sha256 or entry.sha256,
+                source = source, settings = include ~= nil and include[1] == true,
+            };
+            manifest.profile.addons[#manifest.profile.addons + 1] = portable;
+            if portable.settings then ids[#ids + 1] = entry.id; end
+        end
+    end
+    local manifest_path = config_root .. 'cache\\profile-export.json';
+    ashita.fs.create_directory(config_root .. 'cache');
+    if not write_text(manifest_path, encode(manifest)) then state.notice = 'Could not stage the profile manifest.'; return; end
+    local job, err = backend.start({ operation = 'exportProfile', packageId = 'profile-transfer',
+        manifestPath = manifest_path, outputPath = output, packageIds = table.concat(ids, ';') });
+    if job == nil then state.notice = err; return; end
+    state.operation = job; state.operation_context = { kind = 'profile-export' };
+    state.notice = 'Scanning settings and exporting ' .. profile.name .. '...';
+end
+
+local function load_import_review(staging)
+    local manifest = decode(read_text(staging .. '\\profile.json'));
+    local valid, err = profiles.validate_import(manifest);
+    if not valid then state.notice = err; state.transfer = { mode = nil }; return; end
+    local review = { mode = 'import', phase = 'review', staging = staging, manifest = manifest,
+        entries = { }, repositories = { }, errors = { } };
+    local repository_by_url = { };
+    for _, repository in ipairs(state.repositories) do
+        if type(repository.url) == 'string' then repository_by_url[repository.url] = repository; end
+    end
+    for _, source in ipairs(manifest.profile.addons) do
+        local item = { source = source, install = T{ source.source == nil or source.source.builtin == true },
+            settings = T{ source.settings == true }, skipSettings = false };
+        if source.source ~= nil and source.source.builtin ~= true then
+            local portable = review.repositories[source.source.url];
+            if portable == nil then
+                portable = { url = source.source.url, name = source.source.name or source.source.url,
+                    approved = T{ repository_by_url[source.source.url] ~= nil }, existing = repository_by_url[source.source.url] };
+                review.repositories[source.source.url] = portable;
+            end
+            item.repository = portable; item.install[1] = false;
+        end
+        local installed = state.installed[source.id];
+        if installed ~= nil then
+            local local_repository = repository_for_id(installed.source);
+            local expected_builtin = source.source == nil or source.source.builtin == true;
+            item.sourceMismatch = local_repository == nil
+                or (expected_builtin and local_repository.builtin ~= true)
+                or (not expected_builtin and local_repository.url ~= source.source.url);
+            if item.sourceMismatch then item.settings[1] = false; end
+        end
+        review.entries[#review.entries + 1] = item;
+    end
+    state.transfer = review;
+end
+
+local function begin_profile_import()
+    state.transfer = { mode = 'import', phase = 'choose', input_path = T{ '' } };
+end
+
+local function start_profile_import()
+    local input = tostring(state.transfer.input_path[1] or ''):match('^%s*(.-)%s*$');
+    input = input:match('^"(.*)"$') or input;
+    if input == '' or #input > 4096 then state.notice = 'Paste a valid profile archive path.'; return; end
+    if input:find('[\\/]') == nil then
+        if input:match('^[A-Za-z0-9][A-Za-z0-9._-]*$') == nil then
+            state.notice = 'Import filenames may contain only letters, numbers, dots, underscores, and hyphens.'; return;
+        end
+        input = profile_import_root .. input;
+    end
+    local job, err = backend.start({ operation = 'inspectProfile', packageId = 'profile-transfer', inputPath = input });
+    if job == nil then state.notice = err; return; end
+    state.operation = job; state.operation_context = { kind = 'profile-inspect' };
+    state.transfer.phase = 'inspecting';
+    state.notice = 'Inspecting and scanning the profile archive...';
+end
+
+local function confirm_profile_import()
+    local transfer = state.transfer; transfer.repository_queue = { };
+    for _, portable in pairs(transfer.repositories) do
+        if portable.approved[1] and portable.existing == nil then
+            local repository = { id = 'imported-' .. tostring(#state.repositories), name = portable.name,
+                url = portable.url, builtin = false, enabled = true };
+            state.repositories[#state.repositories + 1] = repository; portable.existing = repository;
+            transfer.repository_queue[#transfer.repository_queue + 1] = repository;
+        end
+    end
+    save_state(); transfer.phase = 'repositories'; transfer.install_index = 1;
+end
+
+local function advance_profile_import()
+    local transfer = state.transfer;
+    if transfer.mode ~= 'import' or transfer.phase == 'review' or transfer.phase == 'inspecting'
+        or transfer.phase == 'summary' or state.operation ~= nil or state.addon_action ~= nil then return; end
+    if transfer.phase == 'repositories' then
+        local repository = table.remove(transfer.repository_queue, 1);
+        if repository ~= nil then
+            start_repository_refresh(repository);
+            if state.operation ~= nil then state.operation_context.transfer = true; end
+            return;
+        end
+        transfer.phase = 'installing'; transfer.install_index = 1;
+    end
+    if transfer.phase == 'installing' then
+        while transfer.install_index <= #transfer.entries do
+            local item = transfer.entries[transfer.install_index]; transfer.install_index = transfer.install_index + 1;
+            local source = item.source;
+            if state.installed[source.id] == nil and item.install[1] then
+                if item.repository ~= nil and not item.repository.approved[1] then
+                    transfer.errors[#transfer.errors + 1] = source.id .. ': custom repository was not trusted.';
+                else
+                    local package = package_for_import(source);
+                    if package ~= nil then
+                        if source.version ~= nil and source.version ~= package.version then
+                            transfer.errors[#transfer.errors + 1] = source.id .. ': imported ' .. source.version
+                                .. ', installed current ' .. tostring(package.version) .. '.';
+                        end
+                        start_install(package, package._repository.builtin ~= true);
+                        if state.operation ~= nil then state.operation_context.transfer = true; return; end
+                    else transfer.errors[#transfer.errors + 1] = source.id .. ': no matching catalog package is available.'; end
+                end
+            end
+        end
+        transfer.phase = 'unloading'; transfer.unload_queue = { };
+        for _, item in ipairs(transfer.entries) do
+            if item.settings[1] and state.installed[item.source.id] ~= nil then
+                transfer.unload_queue[#transfer.unload_queue + 1] = item;
+            end
+        end
+    end
+    if transfer.phase == 'unloading' then
+        if transfer.unload_current ~= nil then
+            if is_addon_loaded(transfer.unload_current.source.id) == true then
+                transfer.unload_current.skipSettings = true;
+                transfer.errors[#transfer.errors + 1] = transfer.unload_current.source.id .. ': could not unload; settings skipped.';
+            end
+            transfer.unload_current = nil;
+        end
+        while #transfer.unload_queue > 0 do
+            local item = table.remove(transfer.unload_queue, 1);
+            if is_addon_loaded(item.source.id) == true then
+                transfer.unload_current = item; set_addon_loaded(item.source.id, false, false); return;
+            end
+        end
+        transfer.phase = 'restoring'; transfer.restore_index = 1;
+    end
+    if transfer.phase == 'restoring' then
+        while transfer.restore_index <= #transfer.entries do
+            local item = transfer.entries[transfer.restore_index]; transfer.restore_index = transfer.restore_index + 1;
+            if item.settings[1] and not item.skipSettings and state.installed[item.source.id] ~= nil then
+                local job, err = backend.start({ operation = 'restoreProfileSettings', packageId = item.source.id,
+                    stagingPath = transfer.staging });
+                if job ~= nil then
+                    state.operation = job; state.operation_context = { kind = 'profile-settings', item = item };
+                    return;
+                end
+                transfer.errors[#transfer.errors + 1] = item.source.id .. ': ' .. tostring(err);
+            end
+        end
+        for _, item in ipairs(transfer.entries) do
+            if item.sourceMismatch or state.installed[item.source.id] == nil then item.source.autoLoad = false; end
+        end
+        local profile, err = profiles.import_profile(state, transfer.manifest);
+        if profile == nil then transfer.errors[#transfer.errors + 1] = err;
+        else save_state(); transfer.imported_name = profile.name; end
+        transfer.phase = 'cleanup';
+        local job = backend.start({ operation = 'discardProfileImport', packageId = 'profile-transfer', stagingPath = transfer.staging });
+        if job ~= nil then state.operation = job; state.operation_context = { kind = 'profile-cleanup' }; return; end
+        transfer.phase = 'summary';
     end
 end
 
@@ -380,13 +611,26 @@ local function complete_operation()
                 context.repository.status = 'current';
                 state.notice = nil;
             end
+        elseif context.kind == 'profile-inspect' then
+            load_import_review(state.operation.message);
+            state.notice = 'Review the imported profile before making changes.';
+        elseif context.kind == 'profile-export' then
+            state.transfer = { mode = nil };
+            state.notice = 'Profile exported to ' .. state.operation.message;
+        elseif context.kind == 'profile-settings' then
+            state.notice = context.item.source.id .. ' settings restored.';
+        elseif context.kind == 'profile-cleanup' then
+            state.transfer.phase = 'summary';
+            state.notice = 'Imported profile ' .. tostring(state.transfer.imported_name or '') .. '.';
+        elseif context.kind == 'profile-cancel' then
+            state.transfer = { mode = nil }; state.notice = 'Profile import cancelled.';
         elseif context.kind == 'install' then
             local package = context.package;
             state.installed[package.id] = {
                 id = package.id, name = package.name, version = package.version,
                 sha256 = package.sha256, source = package._repository.id,
             };
-            profiles.add_installed(state, package.id);
+            profiles.add_installed(state, package.id, context.transfer ~= true);
             save_state();
             if package.id == 'vanahub' then state.notice = 'Package manager update staged; it will activate on the next Ashita launch.';
             else state.notice = (package.name or package.id) .. ' installed. Select Load to use it now.'; end
@@ -402,6 +646,15 @@ local function complete_operation()
         context.repository.status = 'cached (stale)';
         state.notice = 'Using cached catalog; refresh failed: ' .. tostring(state.operation.message);
     elseif state.operation.result ~= 0 then
+        if context ~= nil and context.kind == 'profile-inspect' then state.transfer = { mode = nil };
+        elseif context ~= nil and context.kind == 'profile-settings' and state.transfer.mode == 'import' then
+            state.transfer.errors[#state.transfer.errors + 1] = context.item.source.id .. ': '
+                .. (state.operation.message ~= '' and state.operation.message or 'settings restore failed.');
+        elseif context ~= nil and context.kind == 'profile-cleanup' and state.transfer.mode == 'import' then
+            state.transfer.errors[#state.transfer.errors + 1] = 'Temporary import files could not be removed.';
+            state.transfer.phase = 'summary';
+        elseif context ~= nil and context.kind == 'profile-cancel' then state.transfer = { mode = nil };
+        end
         if context ~= nil and context.kind == 'repository' then context.repository.status = 'unavailable'; end
         state.notice = state.operation.message ~= '' and state.operation.message
             or ('Operation failed with result code ' .. tostring(state.operation.result) .. '.');
@@ -597,6 +850,10 @@ local function draw_profile_controls(busy)
         imgui.SameLine();
         if imgui.SmallButton('Cancel') then state.confirm_delete_profile = nil; end
     elseif imgui.SmallButton('Delete') then state.confirm_delete_profile = state.activeProfileId; end
+    imgui.SameLine();
+    if state.transfer.mode == nil and imgui.SmallButton('Export') then begin_profile_export(); end
+    imgui.SameLine();
+    if state.transfer.mode == nil and imgui.SmallButton('Import') then begin_profile_import(); end
     if state.profile_editor ~= nil then
         imgui.SetNextItemWidth(220); imgui.InputText('Name##profile-name', state.profile_name, 80);
         imgui.SameLine();
@@ -614,9 +871,70 @@ local function draw_profile_controls(busy)
     if busy then imgui.EndDisabled(); end
 end
 
+local function cancel_profile_import()
+    if state.transfer.staging == nil then state.transfer = { mode = nil }; return; end
+    local job, err = backend.start({ operation = 'discardProfileImport', packageId = 'profile-transfer',
+        stagingPath = state.transfer.staging });
+    if job == nil then state.notice = err; return; end
+    state.operation = job; state.operation_context = { kind = 'profile-cancel' };
+end
+
+local function draw_profile_transfer()
+    local transfer = state.transfer;
+    if transfer.mode == 'export' then
+        imgui.Separator(); imgui.Text('Export active profile');
+        imgui.TextWrapped('Settings are scanned by content. Executables, scripts, nested archives, unsafe Lua, and unrecognized binary files are rejected. Review profiles before sharing; text settings can contain private values.');
+        imgui.SetNextItemWidth(360);
+        if imgui.InputText('Filename##profile-export', transfer.filename, 161) then transfer.confirm_overwrite = nil; end
+        imgui.TextWrapped('Export folder: ' .. profile_export_root);
+        for id, selected in pairs(transfer.include) do imgui.Checkbox('Include settings: ' .. id .. '##export-' .. id, selected); end
+        if imgui.Button(transfer.confirm_overwrite ~= nil and 'Confirm overwrite' or 'Export profile') then start_profile_export(); end
+        imgui.SameLine(); if imgui.Button('Cancel export') then state.transfer = { mode = nil }; end
+    elseif transfer.mode == 'import' and transfer.phase == 'choose' then
+        imgui.Separator(); imgui.Text('Import profile');
+        imgui.TextWrapped('Paste the full path to a .vanahub-profile.zip file. If you copy it into the managed import folder, enter only its filename.');
+        imgui.SetNextItemWidth(-1); imgui.InputText('File path##profile-import', transfer.input_path, 4096);
+        imgui.TextWrapped('Import folder: ' .. profile_import_root);
+        if imgui.Button('Inspect profile') then start_profile_import(); end
+        imgui.SameLine(); if imgui.Button('Cancel import') then state.transfer = { mode = nil }; end
+    elseif transfer.mode == 'import' and transfer.phase == 'review' then
+        imgui.Separator(); imgui.Text('Import ' .. transfer.manifest.profile.name);
+        imgui.TextWrapped('Profile settings are untrusted data and may be interpreted by addons. The archive passed structural, content, and restricted-Lua scanning. Existing settings will be backed up and replaced; loaded affected addons will be unloaded.');
+        local has_repositories = false;
+        for _, repository in pairs(transfer.repositories) do
+            has_repositories = true;
+            if repository.existing ~= nil then imgui.TextColored({ 0.35, 0.85, 0.45, 1.0 }, 'Configured source: ' .. repository.url);
+            else imgui.Checkbox('Trust custom repository: ' .. repository.url, repository.approved); end
+        end
+        if has_repositories then imgui.Separator(); end
+        for _, item in ipairs(transfer.entries) do
+            local source, installed = item.source, state.installed[item.source.id];
+            imgui.Text(source.id .. (source.version and ('  exported ' .. source.version) or ''));
+            imgui.SameLine();
+            if installed ~= nil then imgui.TextColored({ 0.35, 0.85, 0.45, 1.0 }, 'Installed ' .. tostring(installed.version));
+            else imgui.Checkbox('Install##import-' .. source.id, item.install); end
+            if item.sourceMismatch then imgui.SameLine(); imgui.TextColored({ 1.0, 0.45, 0.35, 1.0 }, 'Different source; settings disabled'); end
+            if source.settings == true then imgui.SameLine(); imgui.Checkbox('Restore settings##import-' .. source.id, item.settings); end
+        end
+        if imgui.Button('Import selected addons and settings') then confirm_profile_import(); end
+        imgui.SameLine(); if imgui.Button('Cancel import') then cancel_profile_import(); end
+    elseif transfer.mode == 'import' and transfer.phase == 'summary' then
+        imgui.Separator(); imgui.Text('Import complete');
+        if transfer.imported_name ~= nil then imgui.Text('Active profile: ' .. transfer.imported_name); end
+        for _, message in ipairs(transfer.errors or { }) do imgui.TextWrapped(message); end
+        if #(transfer.errors or { }) == 0 then imgui.TextColored({ 0.35, 0.85, 0.45, 1.0 }, 'All selected items were imported.'); end
+        if imgui.Button('Done##profile-import') then state.transfer = { mode = nil }; end
+    elseif transfer.mode == 'import' then
+        imgui.Separator(); imgui.Text('Profile import: ' .. tostring(transfer.phase));
+        if state.operation ~= nil and state.operation.message ~= '' then imgui.TextWrapped(state.operation.message); end
+    end
+end
+
 local function draw_installed()
-    local busy = state.operation ~= nil or state.addon_action ~= nil or startup_busy();
+    local busy = state.operation ~= nil or state.addon_action ~= nil or startup_busy()
+        or (state.transfer.mode ~= nil and state.transfer.phase ~= 'summary');
     draw_profile_controls(busy);
+    draw_profile_transfer();
     imgui.TextDisabled('Auto-load and order apply the next time VanaHub starts.');
     if state.startup.started and not state.startup.completed then
         local processed = state.startup.loaded + state.startup.already_loaded + #state.startup.failures;
@@ -700,6 +1018,9 @@ local function draw_repositories()
 end
 
 ashita.fs.create_directory(config_root);
+ashita.fs.create_directory(profile_root);
+ashita.fs.create_directory(profile_export_root);
+ashita.fs.create_directory(profile_import_root);
 load_state();
 save_state();
 local version_root = addon.path .. 'versions\\' .. (addon.active_version or addon.version or '0.1.0') .. '\\';
@@ -710,6 +1031,7 @@ else state.startup.ready = true; end
 ashita.events.register('d3d_present', 'vanahub_render', function ()
     tick_operation();
     tick_addon_action();
+    advance_profile_import();
     tick_startup();
     tick_media();
     if not state.visible[1] then return; end
