@@ -174,6 +174,17 @@ int main() {
     expect(std::filesystem::exists(root / "addons" / "sample" / "sample.lua"), "addon entrypoint installed");
     vh_job_release(engine, install_job);
 
+    const auto media_digest = sha256(archive);
+    const auto media_job = vh_job_start(engine,
+        ("{\"operation\":\"fetchMedia\",\"packageId\":\"sample\",\"url\":\"file:///" +
+         archive.generic_string() + "\",\"sha256\":\"" + media_digest +
+         "\",\"extension\":\"jpg\",\"allowLocal\":true}").c_str());
+    expect(media_job != 0, "media job creation");
+    status = wait_for(engine, media_job);
+    expect(status.find("\"result\":0") != std::string::npos, "content-addressed media cached");
+    expect(std::filesystem::exists(root / "cache" / "media" / (media_digest + ".jpg")), "media cache written");
+    vh_job_release(engine, media_job);
+
     write(valid / "index.json", "tampered");
     const auto tampered = vh_job_start(engine,
         "{\"operation\":\"loadRepositoryCache\",\"packageId\":\"builtin\",\"requireSignature\":true}");

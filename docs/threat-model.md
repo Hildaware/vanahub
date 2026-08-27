@@ -29,6 +29,12 @@ Custom repositories remain an explicit trust decision. Path traversal, unsafe
 archive structure, size abuse, hash mismatch, and signature failure are hard
 blocks that cannot be overridden.
 
+The UI decodes media only for the signed built-in repository. Catalog media is
+normalized during admission, published under its SHA-256 filename, downloaded
+over the client's public-host HTTPS policy, hash-verified, size-limited, and
+cached before Direct3D loads it. Missing or rejected icons use a local rendered
+placeholder; custom-repository media is not decoded.
+
 Catalog scanning runs without the signing key. The private Ed25519 seed is
 exposed only while signing an already-built index and is stored as a protected
 GitHub environment secret; the corresponding client public key is intentionally

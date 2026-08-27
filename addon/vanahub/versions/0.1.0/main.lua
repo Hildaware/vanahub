@@ -3,6 +3,8 @@ require 'common';
 local imgui = require 'imgui';
 local chat = require 'chat';
 local json = require 'json';
+local ffi = require 'ffi';
+local d3d8 = require 'd3d8';
 local backend = require 'backend';
 local builtin = require 'builtin';
 
@@ -14,6 +16,7 @@ local state = {
     visible = T{ false }, search = T{ '' }, selected = nil, packages = { }, installed = { },
     repositories = { }, operation = nil, operation_context = nil, notice = nil,
     revocations = { }, addon_action = nil,
+    media = { cache = { }, queue = { }, job = nil, request = nil },
     custom_url = T{ '' }, custom_ack = T{ false }, developer_mode = T{ false }, consent_package = nil,
 };
 
@@ -203,6 +206,101 @@ local function tick_addon_action()
     end
 end
 
+local function load_texture(path)
+    local device = d3d8.get_device();
+    if device == nil then return nil; end
+    local output = ffi.new('IDirect3DTexture8*[1]');
+    if ffi.C.D3DXCreateTextureFromFileA(device, path, output) ~= ffi.C.S_OK then return nil; end
+    local image = ffi.cast('IDirect3DTexture8*', output[0]);
+    local _, description = image:GetLevelDesc(0);
+    if description == nil then image:Release(); return nil; end
+    return { image = image, width = tonumber(description.Width), height = tonumber(description.Height) };
+end
+
+local function release_textures()
+    for _, value in pairs(state.media.cache) do
+        if type(value) == 'table' and value.image ~= nil then
+            value.image:Release(); value.image = nil;
+        end
+    end
+end
+
+local function request_media(package, url)
+    if type(url) ~= 'string' or state.media.cache[url] ~= nil then return; end
+    if package._repository == nil or package._repository.builtin ~= true then
+        state.media.cache[url] = false; return;
+    end
+    local digest, extension = url:match('/([a-f0-9]+)%.([A-Za-z]+)$');
+    extension = extension and extension:lower() or nil;
+    if digest == nil or #digest ~= 64
+        or (extension ~= 'jpg' and extension ~= 'jpeg' and extension ~= 'png') then
+        state.media.cache[url] = false; return;
+    end
+    state.media.cache[url] = 'queued';
+    state.media.queue[#state.media.queue + 1] = {
+        packageId = package.id, url = url, sha256 = digest, extension = extension,
+    };
+end
+
+local function get_media(package, url)
+    request_media(package, url);
+    local value = state.media.cache[url];
+    return type(value) == 'table' and value or nil, value == false;
+end
+
+local function tick_media()
+    local media = state.media;
+    if media.job ~= nil then
+        backend.poll(media.job);
+        if media.job.terminal then
+            if media.job.result == 0 then media.cache[media.request.url] = load_texture(media.job.message) or false;
+            else media.cache[media.request.url] = false; end
+            backend.release(media.job); media.job = nil; media.request = nil;
+        end
+    end
+    if media.job == nil and #media.queue > 0 and backend.available then
+        local request = table.remove(media.queue, 1);
+        local job = backend.start({
+            operation = 'fetchMedia', packageId = request.packageId, url = request.url,
+            sha256 = request.sha256, extension = request.extension, allowLocal = false,
+        });
+        if job == nil then media.cache[request.url] = false;
+        else media.cache[request.url] = 'loading'; media.job = job; media.request = request; end
+    end
+end
+
+local function draw_icon(package, size)
+    local texture = get_media(package, package.iconUrl);
+    local x, y = imgui.GetCursorScreenPos();
+    local draw_list = imgui.GetWindowDrawList();
+    if texture ~= nil then
+        local scale = math.min(size / texture.width, size / texture.height);
+        local width, height = texture.width * scale, texture.height * scale;
+        local left, top = x + (size - width) / 2, y + (size - height) / 2;
+        draw_list:AddImage(tonumber(ffi.cast('uint32_t', texture.image)),
+            { left, top }, { left + width, top + height }, { 0, 0 }, { 1, 1 }, 0xFFFFFFFF);
+    else
+        draw_list:AddRectFilled({ x, y }, { x + size, y + size }, 0xFF454545, 4.0);
+        draw_list:AddText({ x + size * 0.38, y + size * 0.2 }, 0xFFD0D0D0, '?');
+    end
+    imgui.Dummy({ size, size });
+end
+
+local function draw_screenshots(package)
+    if type(package.screenshots) ~= 'table' or #package.screenshots == 0 then return; end
+    imgui.Separator(); imgui.Text('Screenshots');
+    for index, url in ipairs(package.screenshots) do
+        local texture, failed = get_media(package, url);
+        if texture ~= nil then
+            local available_width = imgui.GetContentRegionAvail();
+            local scale = math.min(1.0, available_width / texture.width, 260 / texture.height);
+            imgui.Image(tonumber(ffi.cast('uint32_t', texture.image)),
+                { math.floor(texture.width * scale), math.floor(texture.height * scale) });
+        elseif failed then imgui.TextDisabled('Screenshot ' .. tostring(index) .. ' is unavailable.');
+        else imgui.TextDisabled('Loading screenshot ' .. tostring(index) .. '...'); end
+    end
+end
+
 local function complete_operation()
     local context = state.operation_context;
     local followup = nil;
@@ -359,6 +457,7 @@ local function draw_package_details(package)
     elseif state.operation ~= nil then
         imgui.TextDisabled('Install controls are waiting for the current operation to finish.');
     end
+    draw_screenshots(package);
 end
 
 local function draw_browse()
@@ -370,7 +469,11 @@ local function draw_browse()
         if state.installed[package.id] ~= nil and package.id ~= 'vanahub' then
             label = label .. (is_addon_loaded(package.id) == true and '  [Enabled]' or '  [Disabled]');
         end
-        if package_matches(package) and imgui.Selectable(label .. '##' .. package.id .. package._repository.id, state.selected == package) then state.selected = package; end
+        if package_matches(package) then
+            draw_icon(package, 30); imgui.SameLine();
+            if imgui.Selectable(label .. '##' .. package.id .. package._repository.id,
+                state.selected == package, ImGuiSelectableFlags_None, { 0, 30 }) then state.selected = package; end
+        end
     end
     if #state.packages == 0 then imgui.TextDisabled('No catalog loaded.'); end
     imgui.EndChild(); imgui.SameLine();
@@ -447,6 +550,7 @@ if backend.available and builtin.index_url ~= '' then start_repository_cache(sta
 ashita.events.register('d3d_present', 'vanahub_render', function ()
     tick_operation();
     tick_addon_action();
+    tick_media();
     if not state.visible[1] then return; end
     imgui.SetNextWindowSize({ 800, 560 }, ImGuiCond_FirstUseEver);
     if imgui.Begin('VanaHub##vanahub', state.visible, bit.bor(ImGuiWindowFlags_MenuBar, ImGuiWindowFlags_NoCollapse)) then
@@ -462,5 +566,7 @@ ashita.events.register('d3d_present', 'vanahub_render', function ()
     imgui.End();
 end);
 
-ashita.events.register('unload', 'vanahub_unload', function () save_state(); backend.shutdown(); end);
+ashita.events.register('unload', 'vanahub_unload', function ()
+    release_textures(); save_state(); backend.shutdown();
+end);
 print(chat.header('VanaHub'):append(chat.message('Loaded. Use /vanahub to open the addon browser.')));

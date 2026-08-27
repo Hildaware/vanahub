@@ -1,4 +1,5 @@
 local ffi = require 'ffi';
+local json = require 'json';
 
 ffi.cdef[[
     typedef struct vh_engine vh_engine;
@@ -73,12 +74,14 @@ function backend.poll(job)
     result = backend.library.vh_job_poll(backend.engine, job.id, buffer, required[0], required);
     if result ~= VH_OK then return job; end
     local text = ffi.string(buffer);
-    job.phase = text:match('"phase":"([^"]*)"') or job.phase;
-    job.message = text:match('"message":"([^"]*)"') or job.message;
-    job.terminal = text:match('"terminal":true') ~= nil;
-    job.result = tonumber(text:match('"result":([0-9]+)')) or job.result;
-    job.completed = tonumber(text:match('"completed":([0-9]+)')) or 0;
-    job.total = tonumber(text:match('"total":([0-9]+)')) or 0;
+    local ok, status = pcall(json.decode, text);
+    if not ok or type(status) ~= 'table' then return job; end
+    job.phase = status.phase or job.phase;
+    job.message = status.message or job.message;
+    job.terminal = status.terminal == true;
+    job.result = tonumber(status.result) or job.result;
+    job.completed = tonumber(status.completed) or 0;
+    job.total = tonumber(status.total) or 0;
     return job;
 end
 

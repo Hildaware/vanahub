@@ -532,6 +532,7 @@ struct vh_engine {
     std::mutex jobs_mutex;
     std::mutex mutation_mutex;
     std::mutex repository_mutex;
+    std::mutex media_mutex;
     std::map<vh_job_id, std::shared_ptr<job>> jobs;
     std::atomic_bool stopping{};
 };
@@ -599,6 +600,43 @@ void execute_job(vh_engine* engine, const std::shared_ptr<job>& current, std::st
         }
         std::error_code cleanup_ec; fs::remove(signature_partial, cleanup_ec);
         current->finish(VH_OK, destination.string()); return;
+    }
+
+    if (operation == "fetchMedia") {
+        std::scoped_lock media_lock(engine->media_mutex);
+        const auto url = json_string(request, "url");
+        const auto expected_hash = vanahub::ascii_casefold(json_string(request, "sha256"));
+        const auto extension = vanahub::ascii_casefold(json_string(request, "extension"));
+        const auto allow_local = json_bool(request, "allowLocal", false);
+        if (url.empty() || !valid_sha256(expected_hash) ||
+            (extension != "jpg" && extension != "jpeg" && extension != "png") ||
+            (!allow_local && !url.ends_with(expected_hash + "." + extension))) {
+            current->finish(VH_INVALID_ARGUMENT, "Invalid media request"); return;
+        }
+        const auto media_root = engine->cache_root / L"media";
+        const auto destination = media_root / widen(expected_hash + "." + extension);
+        if (fs::exists(destination) && sha256_file(destination) == expected_hash) {
+            current->finish(VH_OK, destination.generic_string()); return;
+        }
+        const auto partial = media_root / widen(expected_hash + ".part");
+        current->update("downloading", "Downloading catalog media");
+        std::string error; std::error_code ec;
+        if (!download_file(*current, url, partial, allow_local, false, error)) {
+            fs::remove(partial, ec);
+            current->finish(current->cancel.load() ? VH_CANCELLED : VH_NETWORK_ERROR, error); return;
+        }
+        if (fs::file_size(partial, ec) > 8ull * 1024 * 1024 || ec) {
+            fs::remove(partial, ec); current->finish(VH_SCAN_REJECTED, "Catalog media exceeds the size limit"); return;
+        }
+        current->update("hashing", "Verifying catalog media");
+        if (sha256_file(partial) != expected_hash) {
+            fs::remove(partial, ec); current->finish(VH_HASH_MISMATCH, "Catalog media SHA-256 mismatch"); return;
+        }
+        fs::create_directories(media_root, ec);
+        if (!MoveFileExW(partial.c_str(), destination.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+            fs::remove(partial, ec); current->finish(VH_FILESYSTEM_ERROR, "Could not activate catalog media cache"); return;
+        }
+        current->finish(VH_OK, destination.generic_string()); return;
     }
 
     std::scoped_lock mutation(engine->mutation_mutex);

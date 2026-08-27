@@ -32,7 +32,7 @@ fi
 
 # Audit against the exact Ashita v4 SDK files installed at the deployment target.
 if [[ -d "${ashita_libs}" ]]; then
-    for module_name in common chat imgui json; do
+    for module_name in common chat d3d8 imgui json; do
         if [[ ! -f "${ashita_libs}/${module_name}.lua" ]]; then
             echo "Target Ashita v4 library is missing: ${ashita_libs}/${module_name}.lua" >&2
             exit 1

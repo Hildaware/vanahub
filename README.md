@@ -34,7 +34,9 @@ using Syncthing. The built-in catalog is
 pinned to its GitHub Pages index and Ed25519 verification key in
 `addon/vanahub/versions/0.1.0/builtin.lua`.
 At runtime, VanaHub loads its last verified catalog cache immediately and
-refreshes the signed remote catalog in the background on startup.
+refreshes the signed remote catalog in the background on startup. Built-in
+catalog icons and screenshots are downloaded lazily, verified against their
+content-addressed filenames, and cached under VanaHub's configuration cache.
 
 For the local HorizonXI installation, `make deploy-local` builds and deploys
 directly to `/Users/bferrari/Games/FFXI/HorizonXI/addons/vanahub`.
