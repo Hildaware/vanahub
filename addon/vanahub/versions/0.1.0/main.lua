@@ -19,6 +19,7 @@ local repository_path = config_root .. 'repositories.json';
 local state = {
     schemaVersion = 3,
     visible = T{ false }, search = T{ '' }, selected = nil, packages = { }, installed = { },
+    profile_search = T{ '' }, selected_catalog_profile = nil, catalog_profiles = { },
     profiles = { }, activeProfileId = nil, profile_name = T{ '' }, profile_editor = nil,
     confirm_delete_profile = nil, repositories = { }, operation = nil, operation_context = nil, notice = nil,
     revocations = { }, addon_action = nil, startup = { ready = false, started = false },
@@ -103,7 +104,10 @@ end
 local function rebuild_packages()
     local selected_id = state.selected and state.selected.id or nil;
     local selected_repository = state.selected and state.selected._repository and state.selected._repository.id or nil;
-    local packages = { };
+    local selected_profile_id = state.selected_catalog_profile and state.selected_catalog_profile.id or nil;
+    local selected_profile_repository = state.selected_catalog_profile and state.selected_catalog_profile._repository
+        and state.selected_catalog_profile._repository.id or nil;
+    local packages, catalog_profiles = { }, { };
     local revocations = { };
     for _, repository in ipairs(state.repositories) do
         if repository.enabled and repository.builtin and type(repository.revocations) == 'table' then
@@ -129,15 +133,34 @@ local function rebuild_packages()
                 end
             end
         end
+        if repository.enabled and type(repository.profiles) == 'table' then
+            for _, profile in ipairs(repository.profiles) do
+                if profiles.validate_catalog(profile) then
+                    profile._repository = repository; catalog_profiles[#catalog_profiles + 1] = profile;
+                end
+            end
+        end
     end
     table.sort(packages, function (a, b)
         if a.id == b.id then return a._repository.builtin and not b._repository.builtin; end
         return (a.name or a.id):lower() < (b.name or b.id):lower();
     end);
-    state.packages = packages; state.revocations = revocations; state.selected = nil;
+    table.sort(catalog_profiles, function (a, b)
+        if a.id == b.id then return a._repository.builtin and not b._repository.builtin; end
+        return (a.name or a.id):lower() < (b.name or b.id):lower();
+    end);
+    state.packages = packages; state.catalog_profiles = catalog_profiles;
+    state.revocations = revocations; state.selected = nil; state.selected_catalog_profile = nil;
     if selected_id ~= nil then
         for _, package in ipairs(packages) do
             if package.id == selected_id and package._repository.id == selected_repository then state.selected = package; break; end
+        end
+    end
+    if selected_profile_id ~= nil then
+        for _, profile in ipairs(catalog_profiles) do
+            if profile.id == selected_profile_id and profile._repository.id == selected_profile_repository then
+                state.selected_catalog_profile = profile; break;
+            end
         end
     end
 end
@@ -148,7 +171,8 @@ local function load_repository(repository, path)
         state.notice = 'Repository index is invalid: ' .. tostring(repository.name); return false;
     end
     repository.name = document.repository and document.repository.name or repository.name;
-    repository.packages = document.packages; repository.revocations = document.revocations or { };
+    repository.packages = document.packages; repository.profiles = document.profiles or { };
+    repository.revocations = document.revocations or { };
     repository.generated_at = document.generatedAt;
     repository.loaded = true; rebuild_packages(); save_state(); return true;
 end
@@ -310,12 +334,12 @@ local function start_profile_export()
     state.notice = 'Scanning settings and exporting ' .. profile.name .. '...';
 end
 
-local function load_import_review(staging)
-    local manifest = decode(read_text(staging .. '\\profile.json'));
+local function load_import_review(staging, supplied_manifest, catalog_profile)
+    local manifest = supplied_manifest or decode(read_text(staging .. '\\profile.json'));
     local valid, err = profiles.validate_import(manifest);
     if not valid then state.notice = err; state.transfer = { mode = nil }; return; end
     local review = { mode = 'import', phase = 'review', staging = staging, manifest = manifest,
-        entries = { }, repositories = { }, errors = { } };
+        catalog_profile = catalog_profile, entries = { }, repositories = { }, errors = { } };
     local repository_by_url = { };
     for _, repository in ipairs(state.repositories) do
         if type(repository.url) == 'string' then repository_by_url[repository.url] = repository; end
@@ -344,6 +368,13 @@ local function load_import_review(staging)
         review.entries[#review.entries + 1] = item;
     end
     state.transfer = review;
+end
+
+local function begin_catalog_profile_import(profile)
+    local manifest, err = profiles.catalog_import(profile, profile._repository);
+    if manifest == nil then state.notice = err; return; end
+    load_import_review(nil, manifest, profile);
+    state.notice = 'Review the profile before installing its addons.';
 end
 
 local function begin_profile_import()
@@ -408,7 +439,8 @@ local function advance_profile_import()
                                 .. ', installed current ' .. tostring(package.version) .. '.';
                         end
                         start_install(package, package._repository.builtin ~= true);
-                        if state.operation ~= nil then state.operation_context.transfer = true; return; end
+                        if state.operation ~= nil then state.operation_context.transfer = true; return;
+                        else transfer.errors[#transfer.errors + 1] = source.id .. ': install could not be started.'; end
                     else transfer.errors[#transfer.errors + 1] = source.id .. ': no matching catalog package is available.'; end
                 end
             end
@@ -456,9 +488,13 @@ local function advance_profile_import()
         if profile == nil then transfer.errors[#transfer.errors + 1] = err;
         else save_state(); transfer.imported_name = profile.name; end
         transfer.phase = 'cleanup';
-        local job = backend.start({ operation = 'discardProfileImport', packageId = 'profile-transfer', stagingPath = transfer.staging });
-        if job ~= nil then state.operation = job; state.operation_context = { kind = 'profile-cleanup' }; return; end
+        if transfer.staging ~= nil then
+            local job = backend.start({ operation = 'discardProfileImport', packageId = 'profile-transfer', stagingPath = transfer.staging });
+            if job ~= nil then state.operation = job; state.operation_context = { kind = 'profile-cleanup' }; return; end
+        end
         transfer.phase = 'summary';
+        state.notice = (transfer.catalog_profile ~= nil and 'Installed profile ' or 'Imported profile ')
+            .. tostring(transfer.imported_name or '') .. '.';
     end
 end
 
@@ -612,7 +648,7 @@ local function complete_operation()
                 state.notice = nil;
             end
         elseif context.kind == 'profile-inspect' then
-            load_import_review(state.operation.message);
+            load_import_review(state.operation.message, nil, nil);
             state.notice = 'Review the imported profile before making changes.';
         elseif context.kind == 'profile-export' then
             state.transfer = { mode = nil };
@@ -647,6 +683,10 @@ local function complete_operation()
         state.notice = 'Using cached catalog; refresh failed: ' .. tostring(state.operation.message);
     elseif state.operation.result ~= 0 then
         if context ~= nil and context.kind == 'profile-inspect' then state.transfer = { mode = nil };
+        elseif context ~= nil and context.kind == 'install' and context.transfer == true
+            and state.transfer.mode == 'import' then
+            state.transfer.errors[#state.transfer.errors + 1] = context.package.id .. ': '
+                .. (state.operation.message ~= '' and state.operation.message or 'install failed.');
         elseif context ~= nil and context.kind == 'profile-settings' and state.transfer.mode == 'import' then
             state.transfer.errors[#state.transfer.errors + 1] = context.item.source.id .. ': '
                 .. (state.operation.message ~= '' and state.operation.message or 'settings restore failed.');
@@ -898,8 +938,13 @@ local function draw_profile_transfer()
         if imgui.Button('Inspect profile') then start_profile_import(); end
         imgui.SameLine(); if imgui.Button('Cancel import') then state.transfer = { mode = nil }; end
     elseif transfer.mode == 'import' and transfer.phase == 'review' then
-        imgui.Separator(); imgui.Text('Import ' .. transfer.manifest.profile.name);
-        imgui.TextWrapped('Profile settings are untrusted data and may be interpreted by addons. The archive passed structural, content, and restricted-Lua scanning. Existing settings will be backed up and replaced; loaded affected addons will be unloaded.');
+        imgui.Separator(); imgui.Text((transfer.catalog_profile ~= nil and 'Install ' or 'Import ')
+            .. transfer.manifest.profile.name);
+        if transfer.catalog_profile ~= nil then
+            imgui.TextWrapped('Review the addons below. Missing addons can be installed from the profile catalog source. This catalog profile does not include settings.');
+        else
+            imgui.TextWrapped('Profile settings are untrusted data and may be interpreted by addons. The archive passed structural, content, and restricted-Lua scanning. Existing settings will be backed up and replaced; loaded affected addons will be unloaded.');
+        end
         local has_repositories = false;
         for _, repository in pairs(transfer.repositories) do
             has_repositories = true;
@@ -916,18 +961,109 @@ local function draw_profile_transfer()
             if item.sourceMismatch then imgui.SameLine(); imgui.TextColored({ 1.0, 0.45, 0.35, 1.0 }, 'Different source; settings disabled'); end
             if source.settings == true then imgui.SameLine(); imgui.Checkbox('Restore settings##import-' .. source.id, item.settings); end
         end
-        if imgui.Button('Import selected addons and settings') then confirm_profile_import(); end
-        imgui.SameLine(); if imgui.Button('Cancel import') then cancel_profile_import(); end
+        local confirm_label = transfer.catalog_profile ~= nil and 'Install selected addons and profile'
+            or 'Import selected addons and settings';
+        if imgui.Button(confirm_label) then confirm_profile_import(); end
+        imgui.SameLine();
+        if imgui.Button(transfer.catalog_profile ~= nil and 'Cancel install' or 'Cancel import') then
+            cancel_profile_import();
+        end
     elseif transfer.mode == 'import' and transfer.phase == 'summary' then
-        imgui.Separator(); imgui.Text('Import complete');
+        imgui.Separator(); imgui.Text(transfer.catalog_profile ~= nil and 'Profile installed' or 'Import complete');
         if transfer.imported_name ~= nil then imgui.Text('Active profile: ' .. transfer.imported_name); end
         for _, message in ipairs(transfer.errors or { }) do imgui.TextWrapped(message); end
-        if #(transfer.errors or { }) == 0 then imgui.TextColored({ 0.35, 0.85, 0.45, 1.0 }, 'All selected items were imported.'); end
+        if #(transfer.errors or { }) == 0 then
+            imgui.TextColored({ 0.35, 0.85, 0.45, 1.0 }, transfer.catalog_profile ~= nil
+                and 'All selected items were installed.' or 'All selected items were imported.');
+        end
         if imgui.Button('Done##profile-import') then state.transfer = { mode = nil }; end
     elseif transfer.mode == 'import' then
-        imgui.Separator(); imgui.Text('Profile import: ' .. tostring(transfer.phase));
+        imgui.Separator(); imgui.Text((transfer.catalog_profile ~= nil and 'Profile install: ' or 'Profile import: ')
+            .. tostring(transfer.phase));
         if state.operation ~= nil and state.operation.message ~= '' then imgui.TextWrapped(state.operation.message); end
     end
+end
+
+local function catalog_profile_matches(profile)
+    local query = (state.profile_search[1] or ''):lower();
+    if query == '' then return true; end
+    if (profile.name or profile.id):lower():find(query, 1, true) ~= nil
+        or (profile.description or ''):lower():find(query, 1, true) ~= nil
+        or (profile.author or ''):lower():find(query, 1, true) ~= nil then return true; end
+    if type(profile.categories) == 'table' then
+        for _, category in ipairs(profile.categories) do
+            local label = category_labels[category] or tostring(category);
+            if label:lower():find(query, 1, true) ~= nil then return true; end
+        end
+    end
+    for _, entry in ipairs(profile.addons or { }) do
+        if entry.id:lower():find(query, 1, true) ~= nil then return true; end
+    end
+    return false;
+end
+
+local function draw_catalog_profile_details(profile)
+    imgui.Text(profile.name or profile.id); imgui.Separator();
+    imgui.TextWrapped(profile.description or '');
+    imgui.Text('Author: ' .. tostring(profile.author));
+    imgui.Text('Source: ' .. tostring(profile._repository.name));
+    if profile._repository.builtin then
+        imgui.TextColored({ 0.35, 0.75, 1.0, 1.0 }, 'Signed built-in catalog profile');
+    else
+        imgui.TextColored({ 1.0, 0.65, 0.2, 1.0 }, 'Custom catalog profile');
+    end
+    if type(profile.categories) == 'table' then
+        local labels = { };
+        for _, category in ipairs(profile.categories) do
+            labels[#labels + 1] = category_labels[category] or tostring(category);
+        end
+        imgui.TextWrapped('Categories: ' .. table.concat(labels, ', '));
+    end
+    imgui.Separator(); imgui.Text('Addons (' .. tostring(#profile.addons) .. ')');
+    for _, entry in ipairs(profile.addons) do
+        local installed = state.installed[entry.id] ~= nil;
+        local source = { id = entry.id, source = profile._repository.builtin and { builtin = true }
+            or { builtin = false, url = profile._repository.url } };
+        local available = installed or package_for_import(source) ~= nil;
+        local color = installed and { 0.35, 0.85, 0.45, 1.0 }
+            or (available and { 0.35, 0.75, 1.0, 1.0 } or { 1.0, 0.45, 0.35, 1.0 });
+        local status = installed and 'Installed' or (available and 'Available' or 'Unavailable');
+        imgui.TextColored(color, entry.id .. '  ' .. status
+            .. (entry.autoLoad and '  [Auto-load]' or ''));
+    end
+    local busy = state.operation ~= nil or state.addon_action ~= nil or startup_busy()
+        or (state.transfer.mode ~= nil and state.transfer.phase ~= 'summary');
+    imgui.Separator();
+    if busy then imgui.BeginDisabled(true); end
+    if imgui.Button('Install profile') then begin_catalog_profile_import(profile); end
+    if busy then imgui.EndDisabled(); end
+    draw_screenshots(profile);
+end
+
+local function draw_catalog_profiles()
+    if state.transfer.mode == 'import' and state.transfer.catalog_profile ~= nil then
+        draw_profile_transfer(); return;
+    end
+    imgui.SetNextItemWidth(-1);
+    imgui.InputTextWithHint('##profile-search', 'Search profiles...', state.profile_search, 256);
+    imgui.Separator();
+    imgui.BeginChild('catalog-profile-list', { 260, 0 }, ImGuiChildFlags_Borders, ImGuiWindowFlags_None);
+    local visible = 0;
+    for _, profile in ipairs(state.catalog_profiles) do
+        if catalog_profile_matches(profile) then
+            visible = visible + 1; draw_icon(profile, 30); imgui.SameLine();
+            if imgui.Selectable((profile.name or profile.id) .. '##catalog-profile-' .. profile.id
+                .. profile._repository.id, state.selected_catalog_profile == profile,
+                ImGuiSelectableFlags_None, { 0, 30 }) then state.selected_catalog_profile = profile; end
+        end
+    end
+    if #state.catalog_profiles == 0 then imgui.TextDisabled('No profiles are available in the current catalogs.');
+    elseif visible == 0 then imgui.TextDisabled('No profiles match your search.'); end
+    imgui.EndChild(); imgui.SameLine();
+    imgui.BeginChild('catalog-profile-detail', { 0, 0 }, ImGuiChildFlags_Borders, ImGuiWindowFlags_None);
+    if state.selected_catalog_profile ~= nil then draw_catalog_profile_details(state.selected_catalog_profile);
+    else imgui.TextDisabled('Select a profile.'); end
+    imgui.EndChild();
 end
 
 local function draw_installed()
@@ -1040,6 +1176,7 @@ ashita.events.register('d3d_present', 'vanahub_render', function ()
         if state.notice ~= nil then imgui.TextWrapped(state.notice); imgui.Separator(); end
         if imgui.BeginTabBar('##vanahub-tabs') then
             if imgui.BeginTabItem('Browse') then draw_browse(); imgui.EndTabItem(); end
+            if imgui.BeginTabItem('Profiles') then draw_catalog_profiles(); imgui.EndTabItem(); end
             if imgui.BeginTabItem('Installed') then draw_installed(); imgui.EndTabItem(); end
             if imgui.BeginTabItem('Repositories') then draw_repositories(); imgui.EndTabItem(); end
             if imgui.BeginTabItem('Status') then draw_engine_status(); imgui.EndTabItem(); end

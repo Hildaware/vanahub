@@ -17,6 +17,7 @@
     },
     "generatedAt": { "type": "string", "format": "date-time" },
     "packages": { "type": "array", "items": { "$ref": "package.schema.json" } },
+    "profiles": { "type": "array", "items": { "$ref": "catalog-profile.schema.json" } },
     "revocations": {
       "type": "array",
       "items": {

@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/vanahub/catalog-profile.schema.json",
+  "title": "VanaHub catalog profile manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "name", "description", "author", "addons"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{1,63}$" },
+    "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "description": { "type": "string", "minLength": 1, "maxLength": 2000 },
+    "author": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "iconUrl": { "type": "string", "format": "uri" },
+    "screenshots": {
+      "type": "array", "minItems": 1, "maxItems": 10, "uniqueItems": true,
+      "items": { "type": "string", "format": "uri", "pattern": "^https://", "maxLength": 2048 }
+    },
+    "categories": {
+      "type": "array", "minItems": 1, "maxItems": 3, "uniqueItems": true,
+      "items": { "type": "string", "enum": ["combat", "jobs", "inventory", "crafting", "economy", "maps-travel", "user-interface", "chat-communication", "data-tracking", "quality-of-life", "development-tools"] }
+    },
+    "addons": {
+      "type": "array", "minItems": 1, "maxItems": 256,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "autoLoad"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{1,63}$" },
+          "autoLoad": { "type": "boolean" },
+          "version": { "type": "string", "maxLength": 80 },
+          "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+        }
+      }
+    }
+  }
+}

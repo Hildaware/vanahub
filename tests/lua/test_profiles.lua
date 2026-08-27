@@ -106,4 +106,29 @@ equal(profiles.import_profile(portable, { schemaVersion = 1,
     profile = { name = 'Bad', addons = { { id = '../bad', autoLoad = true,
         settings = false, source = { builtin = true } } } } }), nil, 'unsafe imported addon id rejected');
 
+local catalog_manifest, catalog_error = profiles.catalog_import({
+    schemaVersion = 1, id = 'starter-profile', name = 'Starter Profile',
+    description = 'A useful starting point.', author = 'VanaHub',
+    addons = {
+        { id = 'alpha', autoLoad = true },
+        { id = 'zebra', autoLoad = false, version = '1.2.3' },
+    },
+}, { builtin = true, name = 'Built-in' });
+equal(catalog_error, nil, 'valid catalog profile converted');
+equal(catalog_manifest.profile.name, 'Starter Profile', 'catalog profile name retained');
+equal(catalog_manifest.profile.addons[1].source.builtin, true, 'catalog source retained');
+equal(catalog_manifest.profile.addons[1].settings, false, 'catalog profile does not imply settings');
+
+local custom_manifest = profiles.catalog_import({
+    schemaVersion = 1, id = 'custom-profile', name = 'Custom Profile',
+    description = 'From a configured custom repository.', author = 'Tester',
+    addons = { { id = 'alpha', autoLoad = true } },
+}, { builtin = false, name = 'Custom', url = 'https://example.com/index.json' });
+equal(custom_manifest.profile.addons[1].source.url, 'https://example.com/index.json',
+    'custom catalog source retained');
+equal(profiles.validate_catalog({ schemaVersion = 1, id = 'bad', name = 'Bad',
+    description = 'Bad duplicate.', author = 'Tester', addons = {
+        { id = 'alpha', autoLoad = true }, { id = 'alpha', autoLoad = false },
+    } }), false, 'duplicate catalog addons rejected');
+
 print('profile tests passed');

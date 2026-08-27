@@ -71,6 +71,10 @@ def main() -> int:
         manifests = []
         for path in sorted(args.packages.glob("*/manifest.json")):
             manifests.append(json.loads(path.read_text(encoding="utf-8")))
+        profiles = []
+        profiles_root = args.packages.parent / "profiles"
+        for path in sorted(profiles_root.glob("*/manifest.json")):
+            profiles.append(json.loads(path.read_text(encoding="utf-8")))
         revocations = []
         if args.revocations and args.revocations.exists():
             revocations = json.loads(args.revocations.read_text(encoding="utf-8"))
@@ -79,6 +83,7 @@ def main() -> int:
             "repository": {"id": args.repository_id, "name": args.repository_name},
             "generatedAt": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
             "packages": manifests,
+            "profiles": profiles,
             "revocations": revocations,
         }
         args.output.mkdir(parents=True, exist_ok=True)

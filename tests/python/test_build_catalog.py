@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import os
 import sys
 import tempfile
@@ -14,6 +15,30 @@ spec.loader.exec_module(build_catalog)
 
 
 class BuildCatalogTests(unittest.TestCase):
+    def test_includes_profile_manifests(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            packages = root / "packages"
+            packages.mkdir()
+            profile_dir = root / "profiles" / "starter"
+            profile_dir.mkdir(parents=True)
+            profile = {
+                "schemaVersion": 1,
+                "id": "starter",
+                "name": "Starter",
+                "description": "A useful starting point.",
+                "author": "VanaHub",
+                "addons": [{"id": "example-addon", "autoLoad": True}],
+            }
+            (profile_dir / "manifest.json").write_text(json.dumps(profile), encoding="utf-8")
+            output = root / "public"
+            with mock.patch.object(sys, "argv", [
+                "build_catalog.py", str(packages), str(output), "--unsigned",
+            ]):
+                build_catalog.main()
+            index = json.loads((output / "index.json").read_text(encoding="utf-8"))
+            self.assertEqual(index["profiles"], [profile])
+
     def test_refuses_unsigned_catalog(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

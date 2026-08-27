@@ -38,6 +38,15 @@ refreshes the signed remote catalog in the background on startup. Built-in
 catalog icons and screenshots are downloaded lazily, verified against their
 content-addressed filenames, and cached under VanaHub's configuration cache.
 
+The Profiles tab browses optional pre-built profiles published by configured
+catalogs. Profiles can be searched by name, description, author, category, or
+addon, and their complete addon list is shown before installation. Installing
+a catalog profile reuses the profile-import review: available missing addons
+can be installed, then a uniquely named local profile is created and made
+active. The initial catalog-profile format contains addon order and auto-load
+state but no settings; settings remain available through inspected profile
+archives.
+
 ## Managed startup
 
 Add only VanaHub to the Ashita startup script:
@@ -62,6 +71,8 @@ executables, general-purpose scripts, nested archives, unsafe Lua, links, and
 unrecognized binary data.
 The embedded manifest format is documented by
 [`schemas/profile.schema.json`](schemas/profile.schema.json).
+Catalog profile metadata is documented separately by
+[`schemas/catalog-profile.schema.json`](schemas/catalog-profile.schema.json).
 Exports are written to `config/addons/vanahub/profiles/exports` using the
 filename entered in the ImGui panel; VanaHub asks before replacing an existing
 archive and does not invoke a native operating-system file dialog.
