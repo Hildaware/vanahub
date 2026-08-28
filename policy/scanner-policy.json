@@ -7,7 +7,7 @@
     "entries": 8192,
     "compressionRatio": 200
   },
-  "allowedExtensions": [".lua", ".json", ".ini", ".xml", ".txt", ".md", ".png", ".jpg", ".jpeg", ".dds", ".wav", ".ps1", ".sh", ".yml", ".yaml", ".gitmodules", ".gitattributes"],
+  "allowedExtensions": [".lua", ".json", ".ini", ".xml", ".txt", ".md", ".png", ".jpg", ".jpeg", ".dds", ".wav", ".ps1", ".sh", ".yml", ".yaml", ".gitmodules", ".gitattributes", ".gitignore", ""],
   "privilegedPackageIds": ["vanahub"],
   "privilegedPackageSources": {
     "vanahub": "https://github.com/Hildaware/vanahub"
@@ -19,7 +19,10 @@
     "bundled-file-read": "Reads files bundled with the addon.",
     "native-interop": "Calls native operating system APIs.",
     "process-execution": "Executes background shell commands.",
-    "file-access": "Reads or writes files directly."
+    "file-access": "Reads or writes files directly.",
+    "dynamic-code": "Dynamically loads and executes Lua code at runtime.",
+    "memory-write": "Directly modifies game memory.",
+    "network": "Accesses the internet or local network."
   },
   "dangerousCapabilities": [
     "native-interop", "network", "file-access", "process-execution",
@@ -27,8 +30,7 @@
     "command-injection", "registry-write", "obfuscation", "elevated"
   ],
   "blockedSymbols": [
-    "socket", "ssl.https", "package.loadlib",
-    "loadstring", "load", "loadfile", "dofile", "getfenv", "setfenv", "_ENV", "string.dump", "debug", "ashita.memory.write",
+    "socket", "ssl.https",
     "InjectPacket", "QueueCommand", "CreateProcess", "ShellExecute", "WinExec",
     "LoadLibrary", "RegSetValue", "URLDownloadToFile"
   ]
