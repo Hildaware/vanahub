@@ -148,7 +148,7 @@ def validate_catalog(value: object) -> dict:
     for key, maximum in (("description", 2000), ("author", 80)):
         if not isinstance(value[key], str) or not value[key].strip() or len(value[key]) > maximum:
             raise ProfileError(f"catalog {key} is invalid")
-    if not isinstance(value["version"], str) or not SEMVER.fullmatch(value["version"]):
+    if not isinstance(value["version"], str) or len(value["version"]) > 80 or not SEMVER.fullmatch(value["version"]):
         raise ProfileError("catalog profile version is invalid")
     if not isinstance(value["downloadUrl"], str) or not RELEASE_URL.fullmatch(value["downloadUrl"]):
         raise ProfileError("catalog download URL must be a GitHub Release asset")

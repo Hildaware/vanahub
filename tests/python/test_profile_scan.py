@@ -65,6 +65,8 @@ class ProfileScanTests(unittest.TestCase):
                 "settings/sample-addon/settings.json": json.dumps({"theme": "blue", "api_key": "secret-value"}),
                 "settings/sample-addon/settings.lua": 'return T{ password = "hunter2", enabled = true }',
                 "settings/sample-addon/settings.ini": "token=plain-secret\ntheme=blue\n",
+                "settings/sample-addon/settings.xml": "<settings><password>xml-secret</password></settings>",
+                "settings/sample-addon/contact.txt": "owner@example.com\n",
             })
             archive, manifest, report = self.prepare(root, source)
             first = archive.read_bytes()
@@ -74,10 +76,13 @@ class ProfileScanTests(unittest.TestCase):
                 self.assertNotIn(b"secret-value", output.read("settings/sample-addon/settings.json"))
                 self.assertNotIn(b"hunter2", output.read("settings/sample-addon/settings.lua"))
                 self.assertNotIn(b"plain-secret", output.read("settings/sample-addon/settings.ini"))
+                self.assertNotIn(b"xml-secret", output.read("settings/sample-addon/settings.xml"))
             catalog = json.loads(manifest.read_text())
             self.assertEqual(catalog["addons"], portable()["profile"]["addons"])
             self.assertEqual(catalog["compressedSize"], archive.stat().st_size)
-            self.assertEqual(json.loads(report.read_text())["redacted"], 3)
+            scan_report = json.loads(report.read_text())
+            self.assertEqual(scan_report["redacted"], 4)
+            self.assertEqual(scan_report["warnings"], 1)
 
     def test_private_key_blocks_preparation(self):
         with tempfile.TemporaryDirectory() as directory:
