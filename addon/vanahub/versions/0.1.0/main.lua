@@ -371,10 +371,17 @@ local function load_import_review(staging, supplied_manifest, catalog_profile)
 end
 
 local function begin_catalog_profile_import(profile)
-    local manifest, err = profiles.catalog_import(profile, profile._repository);
-    if manifest == nil then state.notice = err; return; end
-    load_import_review(nil, manifest, profile);
-    state.notice = 'Review the profile before installing its addons.';
+    local valid, err = profiles.validate_catalog(profile);
+    if not valid then state.notice = err; return; end
+    local repository = profile._repository;
+    if type(repository) ~= 'table' then state.notice = 'Profile catalog source is unavailable.'; return; end
+    local job, start_error = backend.start({ operation = 'inspectCatalogProfile', packageId = 'profile-transfer',
+        url = profile.downloadUrl, sha256 = profile.sha256, compressedSize = profile.compressedSize,
+        allowLocal = repository.local_source == true, githubOnly = repository.builtin == true });
+    if job == nil then state.notice = start_error; return; end
+    state.transfer = { mode = 'import', phase = 'downloading', catalog_profile = profile };
+    state.operation = job; state.operation_context = { kind = 'catalog-profile-inspect', profile = profile };
+    state.notice = 'Downloading and scanning ' .. profile.name .. '...';
 end
 
 local function begin_profile_import()
@@ -650,6 +657,9 @@ local function complete_operation()
         elseif context.kind == 'profile-inspect' then
             load_import_review(state.operation.message, nil, nil);
             state.notice = 'Review the imported profile before making changes.';
+        elseif context.kind == 'catalog-profile-inspect' then
+            load_import_review(state.operation.message, nil, context.profile);
+            state.notice = 'Review the downloaded profile before making changes.';
         elseif context.kind == 'profile-export' then
             state.transfer = { mode = nil };
             state.notice = 'Profile exported to ' .. state.operation.message;
@@ -682,7 +692,8 @@ local function complete_operation()
         context.repository.status = 'cached (stale)';
         state.notice = 'Using cached catalog; refresh failed: ' .. tostring(state.operation.message);
     elseif state.operation.result ~= 0 then
-        if context ~= nil and context.kind == 'profile-inspect' then state.transfer = { mode = nil };
+        if context ~= nil and (context.kind == 'profile-inspect' or context.kind == 'catalog-profile-inspect') then
+            state.transfer = { mode = nil };
         elseif context ~= nil and context.kind == 'install' and context.transfer == true
             and state.transfer.mode == 'import' then
             state.transfer.errors[#state.transfer.errors + 1] = context.package.id .. ': '
@@ -941,7 +952,7 @@ local function draw_profile_transfer()
         imgui.Separator(); imgui.Text((transfer.catalog_profile ~= nil and 'Install ' or 'Import ')
             .. transfer.manifest.profile.name);
         if transfer.catalog_profile ~= nil then
-            imgui.TextWrapped('Review the addons below. Missing addons can be installed from the profile catalog source. This catalog profile does not include settings.');
+            imgui.TextWrapped('Review the addons and settings below. The downloaded archive passed hash, structural, content, and restricted-Lua scanning. Existing settings will be backed up before replacement.');
         else
             imgui.TextWrapped('Profile settings are untrusted data and may be interpreted by addons. The archive passed structural, content, and restricted-Lua scanning. Existing settings will be backed up and replaced; loaded affected addons will be unloaded.');
         end

@@ -45,6 +45,12 @@ text remains portable, and unknown binary data is rejected. These checks do
 not prove that arbitrary text values are harmless to every consuming addon, so
 the UI requires sender trust and explicit approval for carried custom sources.
 
+Catalog profile archives cross the same inspection boundary. Before inspection,
+the client enforces the signed catalog entry's compressed size and SHA-256;
+built-in catalog downloads are additionally restricted to approved GitHub
+Release hosts. No catalog profile settings are restored before the user reviews
+the affected addons and per-addon restore selections.
+
 Settings restoration is transactional per addon. Loaded addons must unload,
 the existing configuration is moved into a recoverable backup, and an
 interrupted commit is recovered by the native transaction journal. VanaHub's
