@@ -28,7 +28,11 @@ class BuildCatalogTests(unittest.TestCase):
                 "name": "Starter",
                 "description": "A useful starting point.",
                 "author": "VanaHub",
-                "addons": [{"id": "example-addon", "autoLoad": True}],
+                "version": "1.0.0",
+                "downloadUrl": "https://github.com/Hildaware/vanahub-catalog/releases/download/profile-starter-v1.0.0/starter-1.0.0.vanahub-profile.zip",
+                "sha256": "a" * 64,
+                "compressedSize": 100,
+                "addons": [{"id": "example-addon", "autoLoad": True, "settings": True, "source": {"builtin": True}}],
             }
             (profile_dir / "manifest.json").write_text(json.dumps(profile), encoding="utf-8")
             output = root / "public"

@@ -108,10 +108,12 @@ equal(profiles.import_profile(portable, { schemaVersion = 1,
 
 local catalog_manifest, catalog_error = profiles.catalog_import({
     schemaVersion = 1, id = 'starter-profile', name = 'Starter Profile',
-    description = 'A useful starting point.', author = 'VanaHub',
+    description = 'A useful starting point.', author = 'VanaHub', version = '1.0.0',
+    downloadUrl = 'https://github.com/Hildaware/vanahub-catalog/releases/download/profile-starter-profile-v1.0.0/starter-profile-1.0.0.vanahub-profile.zip',
+    sha256 = string.rep('a', 64), compressedSize = 100,
     addons = {
-        { id = 'alpha', autoLoad = true },
-        { id = 'zebra', autoLoad = false, version = '1.2.3' },
+        { id = 'alpha', autoLoad = true, settings = true, source = { builtin = true } },
+        { id = 'zebra', autoLoad = false, settings = false, source = { builtin = true }, version = '1.2.3' },
     },
 }, { builtin = true, name = 'Built-in' });
 equal(catalog_error, nil, 'valid catalog profile converted');
@@ -121,14 +123,20 @@ equal(catalog_manifest.profile.addons[1].settings, false, 'catalog profile does 
 
 local custom_manifest = profiles.catalog_import({
     schemaVersion = 1, id = 'custom-profile', name = 'Custom Profile',
-    description = 'From a configured custom repository.', author = 'Tester',
-    addons = { { id = 'alpha', autoLoad = true } },
+    description = 'From a configured custom repository.', author = 'Tester', version = '1.0.0',
+    downloadUrl = 'https://github.com/Hildaware/vanahub-catalog/releases/download/profile-custom-profile-v1.0.0/custom-profile-1.0.0.vanahub-profile.zip',
+    sha256 = string.rep('b', 64), compressedSize = 100,
+    addons = { { id = 'alpha', autoLoad = true, settings = true,
+        source = { builtin = false, name = 'Custom', url = 'https://example.com/index.json' } } },
 }, { builtin = false, name = 'Custom', url = 'https://example.com/index.json' });
 equal(custom_manifest.profile.addons[1].source.url, 'https://example.com/index.json',
     'custom catalog source retained');
 equal(profiles.validate_catalog({ schemaVersion = 1, id = 'bad', name = 'Bad',
-    description = 'Bad duplicate.', author = 'Tester', addons = {
-        { id = 'alpha', autoLoad = true }, { id = 'alpha', autoLoad = false },
+    description = 'Bad duplicate.', author = 'Tester', version = '1.0.0',
+    downloadUrl = 'https://github.com/Hildaware/vanahub-catalog/releases/download/profile-bad-v1.0.0/bad-1.0.0.vanahub-profile.zip',
+    sha256 = string.rep('c', 64), compressedSize = 100, addons = {
+        { id = 'alpha', autoLoad = true, settings = false, source = { builtin = true } },
+        { id = 'alpha', autoLoad = false, settings = false, source = { builtin = true } },
     } }), false, 'duplicate catalog addons rejected');
 
 print('profile tests passed');

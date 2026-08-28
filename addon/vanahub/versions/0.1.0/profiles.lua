@@ -181,14 +181,23 @@ function profiles.validate_catalog(raw)
         or type(raw.name) ~= 'string' or raw.name:match('^%s*(.-)%s*$') == '' or #raw.name > 80
         or raw.name:find('[%z\1-\31]') ~= nil or type(raw.description) ~= 'string'
         or raw.description == '' or #raw.description > 2000 or type(raw.author) ~= 'string'
-        or raw.author == '' or #raw.author > 80 or type(raw.addons) ~= 'table'
+        or raw.author == '' or #raw.author > 80 or type(raw.version) ~= 'string'
+        or #raw.version > 80 or type(raw.downloadUrl) ~= 'string'
+        or raw.downloadUrl:match('^https://github%.com/[^/]+/[^/]+/releases/download/[^/]+/[^/]+$') == nil
+        or type(raw.sha256) ~= 'string' or #raw.sha256 ~= 64
+        or raw.sha256:match('^[a-f0-9]+$') == nil or type(raw.compressedSize) ~= 'number'
+        or raw.compressedSize < 1 or raw.compressedSize > 67108864 or type(raw.addons) ~= 'table'
         or #raw.addons == 0 or #raw.addons > 256 then
         return false, 'Catalog profile manifest is invalid.';
     end
     local seen = { };
     for _, entry in ipairs(raw.addons) do
         if type(entry) ~= 'table' or not safe_id(entry.id) or seen[entry.id]
-            or type(entry.autoLoad) ~= 'boolean' then
+            or entry.id == 'vanahub' or type(entry.autoLoad) ~= 'boolean'
+            or type(entry.settings) ~= 'boolean' or type(entry.source) ~= 'table'
+            or type(entry.source.builtin) ~= 'boolean'
+            or (entry.source.builtin ~= true and (type(entry.source.url) ~= 'string'
+                or entry.source.url:match('^https://') == nil)) then
             return false, 'Catalog profile contains invalid or duplicate addons.';
         end
         seen[entry.id] = true;
@@ -199,20 +208,11 @@ end
 function profiles.catalog_import(raw, repository)
     local valid, error = profiles.validate_catalog(raw);
     if not valid then return nil, error; end
-    local source = { builtin = repository ~= nil and repository.builtin == true };
-    if not source.builtin then
-        if repository == nil or type(repository.url) ~= 'string'
-            or repository.url:match('^https://') == nil then
-            return nil, 'Catalog profile source is invalid.';
-        end
-        source.url = repository.url;
-        source.name = repository.name;
-    end
     local manifest = { schemaVersion = 1, profile = { name = raw.name, addons = { } } };
     for _, entry in ipairs(raw.addons) do
         manifest.profile.addons[#manifest.profile.addons + 1] = {
             id = entry.id, autoLoad = entry.autoLoad, settings = false,
-            version = entry.version, sha256 = entry.sha256, source = source,
+            version = entry.version, sha256 = entry.sha256, source = entry.source,
         };
     end
     return manifest;

@@ -14,6 +14,9 @@ add_library(vanahub_core STATIC
 target_include_directories(vanahub_core PUBLIC native/include)
 target_compile_features(vanahub_core PUBLIC cxx_std_20)
 
+add_executable(vanahub_settings_scan tools/settings_scan.cpp)
+target_link_libraries(vanahub_settings_scan PRIVATE vanahub_core)
+
 if(VH_BUILD_ENGINE)
     if(NOT WIN32)
         message(FATAL_ERROR "The package engine targets Win32 only")

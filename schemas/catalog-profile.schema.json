@@ -4,13 +4,17 @@
   "title": "VanaHub catalog profile manifest",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "id", "name", "description", "author", "addons"],
+  "required": ["schemaVersion", "id", "name", "description", "author", "version", "downloadUrl", "sha256", "compressedSize", "addons"],
   "properties": {
     "schemaVersion": { "const": 1 },
     "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{1,63}$" },
     "name": { "type": "string", "minLength": 1, "maxLength": 80 },
     "description": { "type": "string", "minLength": 1, "maxLength": 2000 },
     "author": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "version": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$" },
+    "downloadUrl": { "type": "string", "pattern": "^https://github\\.com/[^/]+/[^/]+/releases/download/[^/]+/[^/]+$", "maxLength": 2048 },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "compressedSize": { "type": "integer", "minimum": 1, "maximum": 67108864 },
     "iconUrl": { "type": "string", "format": "uri" },
     "screenshots": {
       "type": "array", "minItems": 1, "maxItems": 10, "uniqueItems": true,
@@ -24,12 +28,31 @@
       "type": "array", "minItems": 1, "maxItems": 256,
       "items": {
         "type": "object", "additionalProperties": false,
-        "required": ["id", "autoLoad"],
+        "required": ["id", "autoLoad", "settings", "source"],
         "properties": {
           "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{1,63}$" },
           "autoLoad": { "type": "boolean" },
           "version": { "type": "string", "maxLength": 80 },
-          "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+          "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "settings": { "type": "boolean" },
+          "source": {
+            "oneOf": [
+              {
+                "type": "object", "additionalProperties": false,
+                "required": ["builtin"],
+                "properties": { "builtin": { "const": true } }
+              },
+              {
+                "type": "object", "additionalProperties": false,
+                "required": ["builtin", "url"],
+                "properties": {
+                  "builtin": { "const": false },
+                  "name": { "type": "string", "maxLength": 200 },
+                  "url": { "type": "string", "pattern": "^https://", "maxLength": 2048 }
+                }
+              }
+            ]
+          }
         }
       }
     }

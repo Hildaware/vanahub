@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "sensitiveKeys": [
+    "access_token", "accesstoken", "api_key", "apikey", "authorization",
+    "bearer", "client_secret", "cookie", "password", "passwd",
+    "refresh_token", "refreshtoken", "secret", "session", "token",
+    "webhook", "webhook_url"
+  ],
+  "credentialPatterns": [
+    {"id": "credential.github-token", "pattern": "(?:gh[pousr]_[A-Za-z0-9_]{20,255}|github_pat_[A-Za-z0-9_]{20,255})"},
+    {"id": "credential.bearer", "pattern": "(?i:bearer)[ \\t]+[A-Za-z0-9._~+/-]{16,}={0,2}"},
+    {"id": "credential.discord-webhook", "pattern": "https://(?:canary\\.|ptb\\.)?discord(?:app)?\\.com/api/webhooks/[0-9]+/[A-Za-z0-9._-]+"}
+  ],
+  "blockingPatterns": [
+    {"id": "credential.private-key", "pattern": "-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----"}
+  ]
+}
