@@ -73,6 +73,10 @@ The embedded manifest format is documented by
 [`schemas/profile.schema.json`](schemas/profile.schema.json).
 Catalog profile metadata is documented separately by
 [`schemas/catalog-profile.schema.json`](schemas/catalog-profile.schema.json).
+Catalog entries describe immutable versioned GitHub Release assets with their
+SHA-256 and compressed size. Their addon summaries mirror the embedded
+`profile.json`, including settings and custom-source flags, so users can review
+the profile before downloading its archive.
 Exports are written to `config/addons/vanahub/profiles/exports` using the
 filename entered in the ImGui panel; VanaHub asks before replacing an existing
 archive and does not invoke a native operating-system file dialog.
@@ -84,6 +88,13 @@ replaced only after affected addons unload. Unavailable or failed addons remain
 visible in the new profile with auto-load disabled. Profile files are not
 signed: only import profiles from people you trust, and inspect the review for
 private settings and custom repository URLs.
+
+Public catalog preparation rebuilds profile archives deterministically and
+attempts safe credential redaction in supported JSON, XML, INI-style, and
+serialized-Lua settings. Private keys and ambiguous credentials block
+publication; possible personal data is reported for manual review without
+logging the matched value. Sanitization is a backstop rather than a guarantee,
+so exports must still be reviewed before making them public.
 To import, paste a full archive path into the ImGui panel, or copy the file into
 `config/addons/vanahub/profiles/imports` and enter only its filename.
 
