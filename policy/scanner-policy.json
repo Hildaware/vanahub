@@ -7,7 +7,7 @@
     "entries": 8192,
     "compressionRatio": 200
   },
-  "allowedExtensions": [".lua", ".json", ".ini", ".xml", ".txt", ".md", ".png", ".jpg", ".jpeg", ".dds", ".wav", ".ps1", ".sh", ".yml", ".yaml", ".gitmodules", ".gitattributes", ".gitignore", ""],
+  "allowedExtensions": [".lua", ".json", ".ini", ".xml", ".txt", ".md", ".png", ".jpg", ".jpeg", ".dds", ".wav", ".ps1", ".sh", ".yml", ".yaml", ".gitmodules", ".gitattributes", ".gitignore", ".bmp", ""],
   "privilegedPackageIds": ["vanahub"],
   "privilegedPackageSources": {
     "vanahub": "https://github.com/Hildaware/vanahub"
