@@ -106,7 +106,7 @@ equal(profiles.import_profile(portable, { schemaVersion = 1,
     profile = { name = 'Bad', addons = { { id = '../bad', autoLoad = true,
         settings = false, source = { builtin = true } } } } }), nil, 'unsafe imported addon id rejected');
 
-local catalog_manifest, catalog_error = profiles.catalog_import({
+local catalog_manifest = {
     schemaVersion = 1, id = 'starter-profile', name = 'Starter Profile',
     description = 'A useful starting point.', author = 'VanaHub', version = '1.0.0',
     downloadUrl = 'https://github.com/Hildaware/vanahub-catalog/releases/download/profile-starter-profile-v1.0.0/starter-profile-1.0.0.vanahub-profile.zip',
@@ -115,21 +115,20 @@ local catalog_manifest, catalog_error = profiles.catalog_import({
         { id = 'alpha', autoLoad = true, settings = true, source = { builtin = true } },
         { id = 'zebra', autoLoad = false, settings = false, source = { builtin = true }, version = '1.2.3' },
     },
-}, { builtin = true, name = 'Built-in' });
-equal(catalog_error, nil, 'valid catalog profile converted');
-equal(catalog_manifest.profile.name, 'Starter Profile', 'catalog profile name retained');
-equal(catalog_manifest.profile.addons[1].source.builtin, true, 'catalog source retained');
-equal(catalog_manifest.profile.addons[1].settings, false, 'catalog profile does not imply settings');
+};
+equal(profiles.validate_catalog(catalog_manifest), true, 'valid catalog profile accepted');
+equal(catalog_manifest.addons[1].settings, true, 'catalog profile advertises archived settings');
 
-local custom_manifest = profiles.catalog_import({
+local custom_manifest = {
     schemaVersion = 1, id = 'custom-profile', name = 'Custom Profile',
     description = 'From a configured custom repository.', author = 'Tester', version = '1.0.0',
     downloadUrl = 'https://github.com/Hildaware/vanahub-catalog/releases/download/profile-custom-profile-v1.0.0/custom-profile-1.0.0.vanahub-profile.zip',
     sha256 = string.rep('b', 64), compressedSize = 100,
     addons = { { id = 'alpha', autoLoad = true, settings = true,
         source = { builtin = false, name = 'Custom', url = 'https://example.com/index.json' } } },
-}, { builtin = false, name = 'Custom', url = 'https://example.com/index.json' });
-equal(custom_manifest.profile.addons[1].source.url, 'https://example.com/index.json',
+};
+equal(profiles.validate_catalog(custom_manifest), true, 'custom catalog profile accepted');
+equal(custom_manifest.addons[1].source.url, 'https://example.com/index.json',
     'custom catalog source retained');
 equal(profiles.validate_catalog({ schemaVersion = 1, id = 'bad', name = 'Bad',
     description = 'Bad duplicate.', author = 'Tester', version = '1.0.0',

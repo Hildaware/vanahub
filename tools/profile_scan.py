@@ -100,8 +100,8 @@ def validate_source(value: object) -> None:
 
 
 def validate_addons(value: object) -> list[dict]:
-    if not isinstance(value, list) or len(value) > 256:
-        raise ProfileError("addons must be an array with at most 256 entries")
+    if not isinstance(value, list) or not 1 <= len(value) <= 256:
+        raise ProfileError("addons must be an array with one to 256 entries")
     seen: set[str] = set()
     result: list[dict] = []
     for entry in value:
@@ -161,7 +161,36 @@ def validate_catalog(value: object) -> dict:
         categories = value["categories"]
         if not isinstance(categories, list) or not 1 <= len(categories) <= 3 or len(categories) != len(set(categories)) or not set(categories) <= CATEGORIES:
             raise ProfileError("catalog categories are invalid")
+    if "iconUrl" in value:
+        icon = value["iconUrl"]
+        if not isinstance(icon, str) or len(icon) > 2048 or urllib.parse.urlsplit(icon).scheme != "https":
+            raise ProfileError("catalog icon URL is invalid")
+    if "screenshots" in value:
+        screenshots = value["screenshots"]
+        if not isinstance(screenshots, list) or not 1 <= len(screenshots) <= 10 or len(screenshots) != len(set(screenshots)):
+            raise ProfileError("catalog screenshots are invalid")
+        for screenshot in screenshots:
+            if not isinstance(screenshot, str) or len(screenshot) > 2048 or urllib.parse.urlsplit(screenshot).scheme != "https":
+                raise ProfileError("catalog screenshot URL is invalid")
     return value
+
+
+def validate_dependencies(manifest: dict, packages_root: Path) -> None:
+    for entry in manifest["addons"]:
+        if entry["source"]["builtin"] is not True:
+            continue
+        package_path = packages_root / entry["id"] / "manifest.json"
+        if not package_path.is_file():
+            raise ProfileError(f"builtin addon is not present in this catalog: {entry['id']}")
+        try:
+            package = json.loads(package_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ProfileError(f"cannot read builtin addon manifest: {entry['id']}") from exc
+        if package.get("id") != entry["id"]:
+            raise ProfileError(f"builtin addon manifest id does not match: {entry['id']}")
+        for field in ("version", "sha256"):
+            if field in entry and package.get(field) != entry[field]:
+                raise ProfileError(f"builtin addon {field} is unavailable: {entry['id']}")
 
 
 def sensitive_key(key: str, policy: dict) -> bool:
@@ -427,6 +456,8 @@ def prepare(args: argparse.Namespace) -> None:
 
 def verify(args: argparse.Namespace) -> None:
     manifest = validate_catalog(json.loads(args.manifest.read_text(encoding="utf-8")))
+    if getattr(args, "packages_root", None) is not None:
+        validate_dependencies(manifest, args.packages_root)
     temporary = None
     archive = args.archive
     if archive is None:
@@ -466,6 +497,7 @@ def main() -> int:
     check.add_argument("--archive", type=Path)
     check.add_argument("--output", type=Path, required=True)
     check.add_argument("--settings-scanner", type=Path)
+    check.add_argument("--packages-root", type=Path)
     check.set_defaults(function=verify)
     args = parser.parse_args()
     try:

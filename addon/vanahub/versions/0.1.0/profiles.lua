@@ -186,7 +186,8 @@ function profiles.validate_catalog(raw)
         or raw.downloadUrl:match('^https://github%.com/[^/]+/[^/]+/releases/download/[^/]+/[^/]+$') == nil
         or type(raw.sha256) ~= 'string' or #raw.sha256 ~= 64
         or raw.sha256:match('^[a-f0-9]+$') == nil or type(raw.compressedSize) ~= 'number'
-        or raw.compressedSize < 1 or raw.compressedSize > 67108864 or type(raw.addons) ~= 'table'
+        or raw.compressedSize % 1 ~= 0 or raw.compressedSize < 1 or raw.compressedSize > 67108864
+        or type(raw.addons) ~= 'table'
         or #raw.addons == 0 or #raw.addons > 256 then
         return false, 'Catalog profile manifest is invalid.';
     end
@@ -203,19 +204,6 @@ function profiles.validate_catalog(raw)
         seen[entry.id] = true;
     end
     return true;
-end
-
-function profiles.catalog_import(raw, repository)
-    local valid, error = profiles.validate_catalog(raw);
-    if not valid then return nil, error; end
-    local manifest = { schemaVersion = 1, profile = { name = raw.name, addons = { } } };
-    for _, entry in ipairs(raw.addons) do
-        manifest.profile.addons[#manifest.profile.addons + 1] = {
-            id = entry.id, autoLoad = entry.autoLoad, settings = false,
-            version = entry.version, sha256 = entry.sha256, source = entry.source,
-        };
-    end
-    return manifest;
 end
 
 function profiles.active(document)

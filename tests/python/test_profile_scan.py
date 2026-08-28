@@ -100,6 +100,55 @@ class ProfileScanTests(unittest.TestCase):
             with self.assertRaisesRegex(profile_scan.ProfileError, "disabled addon"):
                 self.prepare(root, source)
 
+    def test_profile_requires_at_least_one_addon(self):
+        empty = {"schemaVersion": 1, "profile": {"name": "Empty", "addons": []}}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.zip"
+            write_profile(source, {}, empty)
+            with self.assertRaisesRegex(profile_scan.ProfileError, "one to 256"):
+                self.prepare(root, source)
+
+    def test_catalog_media_urls_must_be_https(self):
+        manifest = {
+            "schemaVersion": 1,
+            "id": "raid-profile",
+            "name": "Raid Profile",
+            "description": "A profile.",
+            "author": "VanaHub",
+            "version": "1.0.0",
+            "downloadUrl": "https://github.com/Hildaware/vanahub-catalog/releases/download/profile-raid-profile-v1.0.0/raid-profile-1.0.0.vanahub-profile.zip",
+            "sha256": "a" * 64,
+            "compressedSize": 100,
+            "addons": portable()["profile"]["addons"],
+            "iconUrl": "javascript:alert(1)",
+        }
+        with self.assertRaisesRegex(profile_scan.ProfileError, "icon URL"):
+            profile_scan.validate_catalog(manifest)
+
+    def test_builtin_dependencies_must_be_available(self):
+        manifest = {
+            "addons": [{
+                "id": "sample-addon",
+                "version": "1.2.3",
+                "sha256": "a" * 64,
+                "source": {"builtin": True},
+            }]
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            packages = Path(directory)
+            with self.assertRaisesRegex(profile_scan.ProfileError, "not present"):
+                profile_scan.validate_dependencies(manifest, packages)
+            package = packages / "sample-addon"
+            package.mkdir()
+            (package / "manifest.json").write_text(json.dumps({
+                "id": "sample-addon", "version": "1.2.3", "sha256": "a" * 64,
+            }))
+            profile_scan.validate_dependencies(manifest, packages)
+            manifest["addons"][0]["version"] = "1.2.2"
+            with self.assertRaisesRegex(profile_scan.ProfileError, "version is unavailable"):
+                profile_scan.validate_dependencies(manifest, packages)
+
     def test_verify_rejects_browse_metadata_mismatch(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

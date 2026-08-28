@@ -42,10 +42,11 @@ The Profiles tab browses optional pre-built profiles published by configured
 catalogs. Profiles can be searched by name, description, author, category, or
 addon, and their complete addon list is shown before installation. Installing
 a catalog profile reuses the profile-import review: available missing addons
-can be installed, then a uniquely named local profile is created and made
-active. The initial catalog-profile format contains addon order and auto-load
-state but no settings; settings remain available through inspected profile
-archives.
+can be installed, selected settings can be restored, then a uniquely named
+local profile is created and made active. The client downloads the immutable
+profile archive, verifies its declared size and SHA-256, and applies the same
+archive and settings-content inspection used for local imports before showing
+the review.
 
 ## Managed startup
 
@@ -76,7 +77,9 @@ Catalog profile metadata is documented separately by
 Catalog entries describe immutable versioned GitHub Release assets with their
 SHA-256 and compressed size. Their addon summaries mirror the embedded
 `profile.json`, including settings and custom-source flags, so users can review
-the profile before downloading its archive.
+the profile before downloading its archive. Built-in catalog profile downloads
+are restricted to approved GitHub Release hosts; custom catalogs retain their
+existing explicit source-trust boundary.
 Exports are written to `config/addons/vanahub/profiles/exports` using the
 filename entered in the ImGui panel; VanaHub asks before replacing an existing
 archive and does not invoke a native operating-system file dialog.

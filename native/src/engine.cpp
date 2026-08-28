@@ -190,6 +190,19 @@ bool json_bool(const std::string& source, const char* key, bool fallback = false
     return std::regex_search(source, match, expression) ? match[1].str() == "true" : fallback;
 }
 
+std::uint64_t json_uint64(const std::string& source, const char* key) {
+    const std::regex expression("\\\"" + std::string(key) + "\\\"\\s*:\\s*([0-9]+)\\s*([,}])");
+    std::smatch match;
+    if (!std::regex_search(source, match, expression)) return 0;
+    try {
+        std::size_t consumed{};
+        const auto value = std::stoull(match[1].str(), &consumed);
+        return consumed == match[1].str().size() ? value : 0;
+    } catch (...) {
+        return 0;
+    }
+}
+
 std::wstring widen(const std::string& value) {
     if (value.empty()) return {};
     const auto count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()), nullptr, 0);
@@ -318,7 +331,8 @@ bool host_resolves_public(const std::wstring& host, std::string& error) {
 }
 
 bool download_file(job& current, const std::string& url, const fs::path& destination,
-                   bool allow_local, bool github_only, std::string& error) {
+                   bool allow_local, bool github_only, std::string& error,
+                   std::uint64_t maximum_size = 50ull * 1024 * 1024) {
     if (allow_local && url.starts_with("file:///")) {
         if (github_only) { error = "Built-in artifacts cannot use local URLs"; return false; }
         auto local = url.substr(8);
@@ -331,7 +345,7 @@ bool download_file(job& current, const std::string& url, const fs::path& destina
         while (input && !current.cancel.load()) {
             input.read(buffer.data(), buffer.size());
             if (input.gcount() > 0) { output.write(buffer.data(), input.gcount()); current.completed += input.gcount(); }
-            if (current.completed > 50ull * 1024 * 1024) { error = "Local file size limit exceeded"; return false; }
+            if (current.completed > maximum_size) { error = "Local file size limit exceeded"; return false; }
         }
         if (current.cancel.load()) { error = "Cancelled"; return false; }
         return input.eof() && output.good();
@@ -409,7 +423,7 @@ bool download_file(job& current, const std::string& url, const fs::path& destina
             const auto amount = static_cast<DWORD>(std::min<std::size_t>(available, buffer.size()));
             if (!WinHttpReadData(request, buffer.data(), amount, &read) || !read) { ok = false; break; }
             output.write(buffer.data(), read); current.completed += read; available -= read;
-            if (current.completed > 50ull * 1024 * 1024) { error = "Download size limit exceeded"; ok = false; break; }
+            if (current.completed > maximum_size) { error = "Download size limit exceeded"; ok = false; break; }
         }
     }
     if (request) WinHttpCloseHandle(request);
@@ -826,6 +840,42 @@ void execute_job(vh_engine* engine, const std::shared_ptr<job>& current, std::st
         if (!inspect_profile(*current, input, staging, error)) {
             current->finish(current->cancel.load() ? VH_CANCELLED : VH_SCAN_REJECTED, error); return;
         }
+        current->finish(VH_OK, staging.generic_string()); return;
+    }
+
+    if (operation == "inspectCatalogProfile") {
+        std::scoped_lock mutation(engine->mutation_mutex);
+        const auto url = json_string(request, "url");
+        const auto expected_hash = vanahub::ascii_casefold(json_string(request, "sha256"));
+        const auto expected_size = json_uint64(request, "compressedSize");
+        const auto allow_local = json_bool(request, "allowLocal", false);
+        const auto github_only = json_bool(request, "githubOnly", false);
+        if (url.empty() || !valid_sha256(expected_hash) || expected_size == 0 ||
+            expected_size > 64ull * 1024 * 1024 || (github_only && allow_local)) {
+            current->finish(VH_INVALID_ARGUMENT, "Invalid catalog profile request"); return;
+        }
+        const auto download_root = engine->cache_root / L"profile-downloads" / std::to_wstring(current->id);
+        const auto archive = download_root / L"profile.zip.part";
+        const auto staging = engine->cache_root / L"profile-imports" / std::to_wstring(current->id);
+        std::error_code ec; fs::remove_all(download_root, ec); fs::create_directories(download_root, ec);
+        current->update("downloading", "Downloading catalog profile");
+        std::string error;
+        if (!download_file(*current, url, archive, allow_local, github_only, error, 64ull * 1024 * 1024)) {
+            fs::remove_all(download_root, ec);
+            current->finish(current->cancel.load() ? VH_CANCELLED : VH_NETWORK_ERROR, error); return;
+        }
+        current->update("hashing", "Verifying catalog profile");
+        const auto actual_size = fs::file_size(archive, ec);
+        if (ec || actual_size != expected_size || sha256_file(archive) != expected_hash) {
+            fs::remove_all(download_root, ec);
+            current->finish(VH_HASH_MISMATCH, "Catalog profile size or SHA-256 mismatch"); return;
+        }
+        current->update("inspecting", "Inspecting and scanning profile settings");
+        if (!inspect_profile(*current, archive, staging, error)) {
+            fs::remove_all(download_root, ec); fs::remove_all(staging, ec);
+            current->finish(current->cancel.load() ? VH_CANCELLED : VH_SCAN_REJECTED, error); return;
+        }
+        fs::remove_all(download_root, ec);
         current->finish(VH_OK, staging.generic_string()); return;
     }
 

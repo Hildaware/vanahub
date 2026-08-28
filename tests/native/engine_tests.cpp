@@ -254,6 +254,27 @@ int main() {
     expect(std::filesystem::exists(std::filesystem::path(staging) / "profile.json"), "profile manifest staged");
     vh_job_release(engine, inspect_job);
 
+    const auto catalog_inspect_job = vh_job_start(engine,
+        ("{\"operation\":\"inspectCatalogProfile\",\"packageId\":\"profile-transfer\",\"url\":\"file:///" +
+         profile_archive.generic_string() + "\",\"sha256\":\"" + sha256(profile_archive) +
+         "\",\"compressedSize\":" + std::to_string(std::filesystem::file_size(profile_archive)) +
+         ",\"allowLocal\":true,\"githubOnly\":false}").c_str());
+    status = wait_for(engine, catalog_inspect_job);
+    expect(status.find("\"result\":0") != std::string::npos, "catalog profile download and inspection succeeds");
+    const auto catalog_staging = status_message(status);
+    expect(std::filesystem::exists(std::filesystem::path(catalog_staging) / "profile.json"),
+           "downloaded catalog profile manifest staged");
+    vh_job_release(engine, catalog_inspect_job);
+
+    const auto mismatched_catalog_job = vh_job_start(engine,
+        ("{\"operation\":\"inspectCatalogProfile\",\"packageId\":\"profile-transfer\",\"url\":\"file:///" +
+         profile_archive.generic_string() + "\",\"sha256\":\"" + invalid_digest +
+         "\",\"compressedSize\":" + std::to_string(std::filesystem::file_size(profile_archive)) +
+         ",\"allowLocal\":true,\"githubOnly\":false}").c_str());
+    status = wait_for(engine, mismatched_catalog_job);
+    expect(status.find("\"result\":8") != std::string::npos, "catalog profile hash mismatch is rejected");
+    vh_job_release(engine, mismatched_catalog_job);
+
     const auto restore_job = vh_job_start(engine,
         ("{\"operation\":\"restoreProfileSettings\",\"packageId\":\"sample\",\"stagingPath\":\"" +
          staging + "\"}").c_str());
