@@ -187,6 +187,7 @@ def redact_json(value: object, path: str, policy: dict, findings: list[Finding],
 
 QUOTED_ASSIGNMENT = re.compile(r"(?P<prefix>(?:^|\n)[ \t]*(?P<key>[A-Za-z_][A-Za-z0-9_.-]*)[ \t]*=[ \t]*)(?P<quote>['\"])(?P<value>(?:\\.|(?!\3).)*)(?P=quote)")
 LUA_ASSIGNMENT = re.compile(r"(?P<prefix>(?P<key>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*)(?P<quote>['\"])(?P<value>(?:\\.|(?!\3).)*)(?P=quote)")
+INI_ASSIGNMENT = re.compile(r"(?m)^(?P<prefix>[ \t]*(?P<key>[A-Za-z_][A-Za-z0-9_.-]*)[ \t]*=[ \t]*)(?P<value>[^\r\n]*?)\s*$")
 
 
 def redact_assignments(text: str, path: str, policy: dict, findings: list[Finding], lua: bool) -> str:
@@ -198,6 +199,18 @@ def redact_assignments(text: str, path: str, policy: dict, findings: list[Findin
         findings.append(Finding("credential.sensitive-key", "redacted", path, key, "replaced", "Sensitive scalar replaced"))
         return f'{match.group("prefix")}{match.group("quote")}{REDACTED}{match.group("quote")}'
     return pattern.sub(replace, text)
+
+
+def redact_ini(text: str, path: str, policy: dict, findings: list[Finding]) -> str:
+    def replace(match: re.Match[str]) -> str:
+        key = match.group("key")
+        if not sensitive_key(key, policy):
+            return match.group(0)
+        value = match.group("value").strip()
+        quote = value[0] if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"" else ""
+        findings.append(Finding("credential.sensitive-key", "redacted", path, key, "replaced", "Sensitive scalar replaced"))
+        return f'{match.group("prefix")}{quote}{REDACTED}{quote}'
+    return INI_ASSIGNMENT.sub(replace, text)
 
 
 def redact_xml(text: str, path: str, policy: dict, findings: list[Finding]) -> str:
@@ -238,7 +251,7 @@ def sanitize_text(data: bytes, path: str, policy: dict, findings: list[Finding])
     elif suffix == ".lua":
         text = redact_assignments(text, path, policy, findings, True)
     elif suffix in {".ini", ".cfg", ".conf"}:
-        text = redact_assignments(text, path, policy, findings, False)
+        text = redact_ini(text, path, policy, findings)
     for rule in policy["credentialPatterns"]:
         if re.search(rule["pattern"], text):
             raise ProfileError(f"{rule['id']} remains in unsupported or ambiguous context: {path}")
@@ -296,6 +309,8 @@ def inspect_archive(path: Path, *, sanitize: bool, scanner: Path | None) -> tupl
                 mode = (info.external_attr >> 16) & 0xFFFF
                 if stat.S_ISLNK(mode) or info.flag_bits & 1:
                     raise ProfileError(f"linked or encrypted entry: {normalized}")
+                if stat.S_IFMT(mode) and not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
+                    raise ProfileError(f"non-regular archive entry: {normalized}")
                 if info.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
                     raise ProfileError(f"unsupported compression: {normalized}")
                 expanded += info.file_size
