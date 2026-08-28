@@ -23,7 +23,7 @@ struct archive_limits {
     std::uint64_t compressed_bytes{50ull * 1024 * 1024};
     std::uint64_t expanded_bytes{200ull * 1024 * 1024};
     std::uint64_t entry_bytes{50ull * 1024 * 1024};
-    std::uint32_t entries{4096};
+    std::uint32_t entries{8192};
     std::uint32_t compression_ratio{200};
 };
 

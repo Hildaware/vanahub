@@ -4,7 +4,7 @@
     "compressedBytes": 52428800,
     "expandedBytes": 209715200,
     "entryBytes": 52428800,
-    "entries": 4096,
+    "entries": 8192,
     "compressionRatio": 200
   },
   "allowedExtensions": [".lua", ".json", ".ini", ".xml", ".txt", ".md", ".png", ".jpg", ".jpeg", ".dds", ".wav"],

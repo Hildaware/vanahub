@@ -484,7 +484,7 @@ bool inspect_and_extract(job& current, const fs::path& archive, const fs::path& 
         const auto folded = vanahub::ascii_casefold(relative);
         if (destinations.contains(folded)) { error = "Duplicate or case-colliding ZIP entry"; break; }
         destinations.emplace(folded, relative);
-        if (destinations.size() > 4096) { error = "ZIP entry-count limit exceeded"; break; }
+        if (destinations.size() > 8192) { error = "ZIP entry-count limit exceeded"; break; }
         if (vanahub::ascii_casefold(relative) == vanahub::ascii_casefold(entrypoint)) found_entrypoint = true;
         code = mz_zip_reader_goto_next_entry(reader);
     }
