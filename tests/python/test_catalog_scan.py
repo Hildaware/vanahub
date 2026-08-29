@@ -4,6 +4,7 @@ import json
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 from pathlib import Path
 
@@ -51,6 +52,31 @@ class CatalogScanTests(unittest.TestCase):
         )
         self.assertTrue(report["accepted"], report["findings"])
 
+    def test_preserves_a_verified_download_for_semantic_review(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_archive = self.make_zip(
+                root, {"sample/sample.lua": "local imgui = require('imgui')\n"},
+            )
+            payload = source_archive.read_bytes()
+            digest = hashlib.sha256(payload).hexdigest()
+            manifest_path = root / "manifest.json"
+            manifest_path.write_text(
+                json.dumps(self.manifest(digest, len(payload))), encoding="utf-8",
+            )
+            output_archive = root / "semantic" / "package.zip"
+
+            def fake_download(_url, destination, _maximum):
+                destination.write_bytes(payload)
+                return digest, len(payload)
+
+            with patch.object(catalog_scan, "download", fake_download):
+                report = catalog_scan.scan(
+                    manifest_path, archive_output=output_archive,
+                )
+            self.assertTrue(report["accepted"], report["findings"])
+            self.assertEqual(output_archive.read_bytes(), payload)
+
     def test_rejects_invalid_screenshot_urls(self):
         report = self.run_scan(
             {"sample/sample.lua": "return true"},
@@ -72,9 +98,9 @@ class CatalogScanTests(unittest.TestCase):
         self.assertFalse(rejected["accepted"])
         self.assertIn("manifest.categories", {f["rule_id"] for f in rejected["findings"]})
 
-    def test_rejects_network(self):
+    def test_reports_network_for_semantic_review(self):
         report = self.run_scan({"sample/sample.lua": "local socket = require('socket')\n"})
-        self.assertFalse(report["accepted"])
+        self.assertTrue(report["accepted"], report["findings"])
         self.assertIn("lua.blocked-symbol", {f["rule_id"] for f in report["findings"]})
         self.assertIn("network", {f["capability"] for f in report["findings"]})
 
@@ -97,29 +123,41 @@ class CatalogScanTests(unittest.TestCase):
         self.assertFalse(report["accepted"])
         self.assertIn("manifest.missing-capability", {f["rule_id"] for f in report["findings"]})
 
-    def test_rejects_aliases_of_dangerous_standard_libraries(self):
-        report = self.run_scan({"sample/sample.lua": "local runner = os\nrunner.execute('calc')\n"})
+    def test_reports_direct_process_execution_for_semantic_review(self):
+        report = self.run_scan({"sample/sample.lua": "os.execute('calc')\n"})
+        self.assertTrue(report["accepted"], report["findings"])
+        self.assertIn("lua.elevated-capability", {f["rule_id"] for f in report["findings"]})
+
+    def test_rejects_critical_download_api_before_semantic_review(self):
+        report = self.run_scan({"sample/sample.lua": "URLDownloadToFile()\n"})
         self.assertFalse(report["accepted"])
         self.assertIn("lua.blocked-symbol", {f["rule_id"] for f in report["findings"]})
 
-    def test_rejects_dynamic_environment_recovery(self):
+    def test_static_scanner_does_not_claim_to_resolve_aliases(self):
         report = self.run_scan({
-            "sample/sample.lua": "return getfenv(0)[string.char(111, 115)]\n",
+            "sample/sample.lua": "local runner = os\nrunner.execute('calc')\n",
         })
-        self.assertFalse(report["accepted"])
-        self.assertIn("lua.blocked-symbol", {f["rule_id"] for f in report["findings"]})
+        self.assertTrue(report["accepted"], report["findings"])
 
-    def test_rejects_unapproved_unbundled_module(self):
+    def test_warns_for_unapproved_unbundled_module(self):
         report = self.run_scan({"sample/sample.lua": "local helper = require('not_bundled')\n"})
-        self.assertFalse(report["accepted"])
+        self.assertTrue(report["accepted"], report["findings"])
         self.assertIn("lua.disallowed-module", {f["rule_id"] for f in report["findings"]})
         finding = next(f for f in report["findings"] if f["rule_id"] == "lua.disallowed-module")
         self.assertEqual(finding["capability"], "unapproved-module")
+        self.assertEqual(finding["severity"], "warning")
 
     def test_accepts_bundled_local_module(self):
         report = self.run_scan({
             "sample/sample.lua": "local helper = require('helper')\nreturn helper\n",
             "sample/helper.lua": "return {}\n",
+        })
+        self.assertTrue(report["accepted"], report["findings"])
+
+    def test_accepts_slash_form_bundled_local_module(self):
+        report = self.run_scan({
+            "sample/sample.lua": "local helper = require('libs/helper')\nreturn helper\n",
+            "sample/libs/helper.lua": "return {}\n",
         })
         self.assertTrue(report["accepted"], report["findings"])
 
@@ -174,8 +212,6 @@ class CatalogScanTests(unittest.TestCase):
         native = (root / "native/src/core.cpp").read_text(encoding="utf-8").casefold()
         for extension in policy["allowedExtensions"]:
             self.assertIn(f'"{extension}"'.casefold(), native)
-        for symbol in policy["blockedSymbols"]:
-            self.assertIn(f'"{symbol}"'.casefold(), native)
 
     def test_semver_update_ordering(self):
         self.assertTrue(verify_submission.semver_greater("1.0.0", "1.0.0-rc.2"))

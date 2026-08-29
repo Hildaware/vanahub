@@ -140,10 +140,12 @@ bool is_safe_package_id(std::string_view value) {
 bool is_allowed_extension(std::string_view value) {
     const auto slash = value.find_last_of("/\\");
     const auto dot = value.find_last_of('.');
-    if (dot == std::string_view::npos || (slash != std::string_view::npos && dot < slash)) return false;
-    const auto extension = ascii_casefold(value.substr(dot));
+    const auto extension = dot == std::string_view::npos || (slash != std::string_view::npos && dot < slash)
+        ? std::string{} : ascii_casefold(value.substr(dot));
     static const std::set<std::string> allowed{
-        ".lua", ".json", ".ini", ".xml", ".txt", ".md", ".png", ".jpg", ".jpeg", ".dds", ".wav"
+        "", ".lua", ".json", ".ini", ".xml", ".txt", ".md", ".png", ".jpg", ".jpeg",
+        ".dds", ".wav", ".ps1", ".sh", ".yml", ".yaml", ".gitmodules", ".gitattributes",
+        ".gitignore", ".bmp"
     };
     return allowed.contains(extension);
 }

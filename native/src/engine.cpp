@@ -437,7 +437,7 @@ bool download_file(job& current, const std::string& url, const fs::path& destina
 
 bool inspect_and_extract(job& current, const fs::path& archive, const fs::path& staging,
                          const std::string& root, const std::string& entrypoint,
-                         bool allow_elevated, bool allow_engine_binary,
+                         bool allow_engine_binary,
                          std::vector<std::string>& owned, std::string& error) {
     void* reader = mz_zip_reader_create();
     if (!reader || mz_zip_reader_open_file(reader, archive.string().c_str()) != MZ_OK) {
@@ -508,11 +508,6 @@ bool inspect_and_extract(job& current, const fs::path& archive, const fs::path& 
                         fs::create_directories(destination.parent_path());
                         if (mz_zip_reader_entry_save_file(reader, destination.string().c_str()) != MZ_OK) { error = "ZIP extraction failed"; break; }
                         owned.push_back(relative);
-                        if (destination.extension() == L".lua") {
-                            std::ifstream lua(destination, std::ios::binary);
-                            std::string text((std::istreambuf_iterator<char>(lua)), {});
-                            if (!allow_elevated && !vanahub::scan_lua(text, relative).empty()) { error = "Lua source violates restricted policy: " + relative; break; }
-                        }
                     }
                 }
             }
@@ -961,9 +956,8 @@ void execute_job(vh_engine* engine, const std::shared_ptr<job>& current, std::st
     const auto root = json_string(request, "archiveRoot");
     const auto entrypoint = json_string(request, "entrypoint");
     const auto version = json_string(request, "version");
-    const auto allow_elevated = json_bool(request, "allowElevated", false);
     if (url.empty() || expected_hash.size() != 64 || !vanahub::is_safe_relative_path(entrypoint) ||
-        (self_update && (package_id != "vanahub" || !vanahub::is_safe_package_id(version) || allow_elevated ||
+        (self_update && (package_id != "vanahub" || !vanahub::is_safe_package_id(version) ||
                          !json_bool(request, "githubOnly", false) || json_bool(request, "allowLocal", false)))) {
         current->finish(VH_INVALID_ARGUMENT, "Invalid install request"); return;
     }
@@ -988,7 +982,7 @@ void execute_job(vh_engine* engine, const std::shared_ptr<job>& current, std::st
     if (sha256_file(archive) != expected_hash) { fs::remove_all(transaction, ec); current->finish(VH_HASH_MISMATCH, "SHA-256 mismatch"); return; }
     current->update("inspecting", "Inspecting archive paths and source");
     std::vector<std::string> owned;
-    if (!inspect_and_extract(*current, archive, staging, root, entrypoint, allow_elevated,
+    if (!inspect_and_extract(*current, archive, staging, root, entrypoint,
                              self_update, owned, error)) {
         fs::remove_all(transaction, ec); current->finish(error.find("policy") != std::string::npos ? VH_SCAN_REJECTED : VH_ARCHIVE_ERROR, error); return;
     }

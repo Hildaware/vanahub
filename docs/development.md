@@ -68,6 +68,12 @@ python3 -m unittest discover -s tests/python -v
 python3 tools/catalog_scan.py package.json --output scan-report.json
 ```
 
+Catalog automation preserves the verified ZIP and passes it to
+`tools/semantic_scan.py`. Baselines are read only from the catalog base branch
+at `reviews/<package-id>.json`; package PRs cannot approve themselves. Elevated
+findings and parser gaps are downgraded only while their exact file SHA-256
+matches. Critical findings cannot be approved.
+
 ## Frontend tests
 
 The profile state and migration logic is independent of Ashita and can be

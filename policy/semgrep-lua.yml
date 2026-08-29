@@ -1,0 +1,93 @@
+rules:
+  - id: vanahub.lua.process-execution
+    languages: [lua]
+    severity: WARNING
+    message: Addon executes a process or opens a command pipe.
+    metadata: { category: security, capability: process-execution, vanahub_risk: elevated }
+    pattern-either:
+      - pattern: os.execute(...)
+      - pattern: io.popen(...)
+
+  - id: vanahub.lua.dynamic-code
+    languages: [lua]
+    severity: WARNING
+    message: Addon loads and executes Lua code dynamically.
+    metadata: { category: security, capability: dynamic-code, vanahub_risk: elevated }
+    pattern-either:
+      - pattern: loadfile(...)
+      - pattern: dofile(...)
+      - pattern: loadstring(...)
+      - pattern: load(...)
+
+  - id: vanahub.lua.native-library-load
+    languages: [lua]
+    severity: WARNING
+    message: Addon loads a native library dynamically.
+    metadata: { category: security, capability: native-interop, vanahub_risk: elevated }
+    pattern-either:
+      - pattern: ffi.load(...)
+      - pattern: package.loadlib(...)
+
+  - id: vanahub.lua.native-call
+    languages: [lua]
+    severity: WARNING
+    message: Addon calls a native function through LuaJIT FFI.
+    metadata: { category: security, capability: native-interop, vanahub_risk: elevated }
+    pattern: ffi.C.$FUNCTION(...)
+
+  - id: vanahub.lua.file-mutation
+    languages: [lua]
+    severity: WARNING
+    message: Addon removes or renames a file or directory.
+    metadata: { category: security, capability: file-access, vanahub_risk: elevated }
+    pattern-either:
+      - pattern: os.remove(...)
+      - pattern: os.rename(...)
+
+  - id: vanahub.lua.file-access
+    languages: [lua]
+    severity: INFO
+    message: Addon opens a file directly.
+    metadata: { category: security, capability: file-access, vanahub_risk: informational }
+    pattern: io.open(...)
+
+  - id: vanahub.lua.network
+    languages: [lua]
+    severity: WARNING
+    message: Addon imports a network client module.
+    metadata: { category: security, capability: network, vanahub_risk: elevated }
+    pattern-either:
+      - pattern: require('socket')
+      - pattern: require("socket")
+      - pattern: require('ssl.https')
+      - pattern: require("ssl.https")
+
+  - id: vanahub.lua.memory-write
+    languages: [lua]
+    severity: WARNING
+    message: Addon writes directly to process memory.
+    metadata: { category: security, capability: memory-write, vanahub_risk: elevated }
+    pattern: ashita.memory.write(...)
+
+  - id: vanahub.lua.packet-injection
+    languages: [lua]
+    severity: WARNING
+    message: Addon injects a game packet.
+    metadata: { category: security, capability: packet-injection, vanahub_risk: elevated }
+    pattern: $OBJECT.InjectPacket(...)
+
+  - id: vanahub.lua.command-injection
+    languages: [lua]
+    severity: WARNING
+    message: Addon queues a game command assembled by addon code.
+    metadata: { category: security, capability: command-injection, vanahub_risk: elevated }
+    pattern-either:
+      - pattern: $OBJECT.QueueCommand(...)
+      - pattern: $OBJECT:QueueCommand(...)
+
+  - id: vanahub.lua.download-to-file
+    languages: [lua]
+    severity: ERROR
+    message: Addon invokes an operating-system download-to-file API.
+    metadata: { category: security, capability: network, vanahub_risk: critical }
+    pattern: $OBJECT.URLDownloadToFile(...)

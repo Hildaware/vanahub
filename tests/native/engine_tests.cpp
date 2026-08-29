@@ -127,7 +127,7 @@ void write_zip(const std::filesystem::path& path, std::vector<zip_entry> entries
 }
 
 void write_regular_file_zip(const std::filesystem::path& path) {
-    write_zip(path, {{"sample/sample.lua", "return true\n"}});
+    write_zip(path, {{"sample/sample.lua", "os.execute('reviewed upstream')\nreturn true\n"}});
 }
 
 std::string sha256(const std::filesystem::path& path) {
@@ -220,10 +220,11 @@ int main() {
         ("{\"operation\":\"install\",\"packageId\":\"sample\",\"url\":\"file:///" +
          archive.generic_string() + "\",\"sha256\":\"" + sha256(archive) +
          "\",\"archiveRoot\":\"sample\",\"entrypoint\":\"sample.lua\","
-         "\"allowElevated\":false,\"allowLocal\":true,\"githubOnly\":false}").c_str());
+         "\"allowLocal\":true,\"githubOnly\":false}").c_str());
     expect(install_job != 0, "install job creation");
     status = wait_for(engine, install_job);
-    expect(status.find("\"result\":0") != std::string::npos, "regular ZIP entry is not treated as a symlink");
+    expect(status.find("\"result\":0") != std::string::npos,
+           "structurally valid addon Lua is installed without a second lexical policy gate");
     expect(std::filesystem::exists(root / "addons" / "sample" / "sample.lua"), "addon entrypoint installed");
     vh_job_release(engine, install_job);
 

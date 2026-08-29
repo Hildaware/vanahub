@@ -15,6 +15,14 @@ inputs:
     description: Trusted base catalog packages directory
     required: false
     default: ''
+  review-root:
+    description: Trusted directory containing package semantic-review baselines
+    required: false
+    default: reviews
+  semantic-output:
+    description: Directory for semantic reports and review candidates
+    required: false
+    default: semantic-review
   token:
     description: GitHub token used for source authorization checks
     required: true
@@ -37,4 +45,8 @@ runs:
       env:
         VH_MANIFEST: ${{ inputs.manifest }}
         VH_OUTPUT: ${{ inputs.output }}
-      run: python3 "$GITHUB_ACTION_PATH/../../../tools/catalog_scan.py" "$VH_MANIFEST" --output "$VH_OUTPUT"
+        VH_REVIEW_ROOT: ${{ inputs['review-root'] }}
+        VH_SEMANTIC_OUTPUT: ${{ inputs['semantic-output'] }}
+      run: |
+        bash "$GITHUB_ACTION_PATH/../../../tools/scan_catalog_package.sh" \
+          "$VH_MANIFEST" "$VH_OUTPUT" "$VH_REVIEW_ROOT" "$VH_SEMANTIC_OUTPUT"

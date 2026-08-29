@@ -17,6 +17,13 @@ The built-in catalog is deliberately restrictive. Passing its automated scan
 means only that the artifact complied with the published policy; it is not a
 guarantee that arbitrary executable Lua is safe.
 
+Every built-in package passes Semgrep-assisted semantic review during catalog
+submission, update discovery, admission, and final publication. Elevated
+behavior and parser gaps require a catalog-maintained exact-file baseline;
+critical findings cannot be approved. The native client independently retains
+structural ZIP validation, while the signed catalog entry and artifact SHA-256
+bind installation to the reviewed bytes.
+
 See [PLAN.md](PLAN.md), [docs/threat-model.md](docs/threat-model.md), and
 [docs/development.md](docs/development.md).
 

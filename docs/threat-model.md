@@ -23,11 +23,14 @@ archive: it downloads, hashes, scans, stages, validates, and then commits.
 Privileged package IDs are bound to explicit official source repositories; an
 author cannot claim the package manager ID to gain its native-engine exception.
 
-Static analysis cannot prove arbitrary Lua harmless. The built-in repository
-therefore accepts only a restricted, intentionally analyzable Lua profile.
-Custom repositories remain an explicit trust decision. Path traversal, unsafe
-archive structure, size abuse, hash mismatch, and signature failure are hard
-blocks that cannot be overridden.
+Static analysis cannot prove arbitrary Lua harmless. Every built-in package
+therefore runs through a local Semgrep gate during submission, update
+discovery, admission, and final publication. Exact-file catalog baselines are
+required for elevated behavior and parser gaps; critical findings cannot be
+baselined. The signed entry and artifact SHA-256 bind runtime installation to
+the reviewed bytes. Custom repositories remain an explicit trust decision.
+Path traversal, unsafe archive structure, size abuse, hash mismatch, and
+signature failure are hard blocks that cannot be overridden.
 
 The UI decodes media only for the signed built-in repository. Catalog media is
 normalized during admission, published under its SHA-256 filename, downloaded

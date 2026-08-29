@@ -33,6 +33,13 @@ GITHUB_RELEASE = re.compile(r"^https://github\.com/[^/]+/[^/]+/releases/download
 SOURCE_REPOSITORY = re.compile(r"^https://github\.com/[^/]+/[^/]+/?$")
 WINDOWS_DEVICES = {"con", "prn", "aux", "nul", "clock$", *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))}
 APPROVED_DOWNLOAD_HOSTS = {"github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"}
+ELEVATED_PATTERNS = (
+    ("native-interop", re.compile(r"\bffi\s*\.\s*load\s*\(|\bffi\s*\.\s*C\s*\.\s*[A-Za-z_][A-Za-z0-9_]*\s*\(", re.IGNORECASE)),
+    ("process-execution", re.compile(r"\bos\s*\.\s*execute\s*\(|\bio\s*\.\s*popen\s*\(", re.IGNORECASE)),
+    ("dynamic-code", re.compile(r"\b(?:loadfile|dofile|loadstring)\s*\(", re.IGNORECASE)),
+    ("native-interop", re.compile(r"\bpackage\s*\.\s*loadlib\s*\(", re.IGNORECASE)),
+    ("memory-write", re.compile(r"\bashita\s*\.\s*memory\s*\.\s*write\b", re.IGNORECASE)),
+)
 
 
 @dataclass(frozen=True)
@@ -177,38 +184,53 @@ def lua_findings(text: str, path: str, policy: dict, local_modules: set[str] | N
         "LoadLibrary": "native-interop", "RegSetValue": "registry-write",
         "URLDownloadToFile": "network",
     }
+    for capability, pattern in ELEVATED_PATTERNS:
+        for match in pattern.finditer(text):
+            line = text.count("\n", 0, match.start()) + 1
+            findings.append(Finding(
+                "lua.elevated-capability", "warning",
+                "Elevated Lua behavior requires review", path, line, capability,
+            ))
     for symbol in policy["blockedSymbols"]:
         pattern = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(symbol) + r"(?![A-Za-z0-9_])", re.IGNORECASE)
         for match in pattern.finditer(text):
             line = text.count("\n", 0, match.start()) + 1
-            findings.append(Finding("lua.blocked-symbol", "error", f"Prohibited symbol: {symbol}", path, line, blocked.get(symbol, "elevated")))
+            severity = "error" if symbol.casefold() == "urldownloadtofile" else "warning"
+            findings.append(Finding("lua.blocked-symbol", severity, f"Sensitive symbol requires semantic review: {symbol}", path, line, blocked.get(symbol, "elevated")))
 
     literal_requires: set[str] = set()
     for match in re.finditer(r"\brequire\s*(?:\(\s*)?(['\"])([^'\"]+)\1\s*\)?", text):
         literal_requires.add(match.group(2))
     all_requires = len(re.findall(r"\brequire\b", text))
     if all_requires != len(literal_requires):
-        findings.append(Finding("lua.computed-require", "error", "All require targets must be unique string literals", path, capability="dynamic-code"))
+        findings.append(Finding("lua.computed-require", "warning", "All require targets must be unique string literals", path, capability="dynamic-code"))
 
     if re.search(r"\b_G\b|\bpackage\s*[.[]", text):
-        findings.append(Finding("lua.environment-manipulation", "error", "Global or package environment manipulation is prohibited", path, capability="dynamic-code"))
+        findings.append(Finding("lua.environment-manipulation", "warning", "Global or package environment manipulation requires semantic review", path, capability="dynamic-code"))
     if re.search(r"\\x[0-9A-Fa-f]{2}", text) and text.count("\\x") > 16:
-        findings.append(Finding("lua.encoded-payload", "error", "Large encoded payload detected", path, capability="obfuscation"))
+        findings.append(Finding("lua.encoded-payload", "warning", "Large encoded payload requires semantic review", path, capability="obfuscation"))
     if max((len(line) for line in text.splitlines()), default=0) > 4000:
-        findings.append(Finding("lua.obfuscated-line", "error", "Source contains an excessively long line", path, capability="obfuscation"))
+        findings.append(Finding("lua.obfuscated-line", "warning", "An excessively long source line requires semantic review", path, capability="obfuscation"))
 
     local_modules = local_modules or set()
     for module in literal_requires:
         if module in policy["allowedModules"] or module in local_modules:
             continue
-        if not re.fullmatch(r"[A-Za-z0-9_.-]+", module):
-            findings.append(Finding("lua.invalid-module", "error", f"Invalid or dynamic-looking module name: {module}", path, capability="dynamic-code"))
+        if (
+            not re.fullmatch(r"[A-Za-z0-9_./-]+", module)
+            or any(part in ("", ".", "..") for part in module.split("/"))
+        ):
+            findings.append(Finding("lua.invalid-module", "warning", f"Invalid or dynamic-looking module name requires semantic review: {module}", path, capability="dynamic-code"))
         else:
-            findings.append(Finding("lua.disallowed-module", "error", f"Module is neither policy-approved nor bundled locally: {module}", path, capability="unapproved-module"))
+            findings.append(Finding("lua.disallowed-module", "warning", f"Module is neither policy-approved nor bundled locally: {module}", path, capability="unapproved-module"))
     return findings
 
 
-def scan_archive(archive: Path, manifest: dict, policy: dict) -> tuple[list[Finding], list[str], set[str]]:
+def scan_archive(
+    archive: Path,
+    manifest: dict,
+    policy: dict,
+) -> tuple[list[Finding], list[str], set[str]]:
     findings: list[Finding] = []
     files: list[str] = []
     limits = policy["limits"]
@@ -232,9 +254,10 @@ def scan_archive(archive: Path, manifest: dict, policy: dict) -> tuple[list[Find
                     continue
                 relative = normalized[len(prefix):] if prefix else normalized
                 if relative.lower().endswith(".lua"):
-                    module = relative[:-4].replace("/", ".")
-                    local_modules.add(module)
-                    local_modules.add(module.rsplit(".", 1)[-1])
+                    slash_module = relative[:-4]
+                    local_modules.add(slash_module)
+                    local_modules.add(slash_module.replace("/", "."))
+                    local_modules.add(slash_module.rsplit("/", 1)[-1])
             if len(infos) > limits["entries"]:
                 findings.append(Finding("zip.too-many-entries", "error", "Archive entry limit exceeded"))
             for info in infos:
@@ -318,7 +341,11 @@ def download(url: str, destination: Path, maximum: int) -> tuple[str, int]:
     return digest.hexdigest(), size
 
 
-def scan(manifest_path: Path, archive_path: Path | None = None) -> dict:
+def scan(
+    manifest_path: Path,
+    archive_path: Path | None = None,
+    archive_output: Path | None = None,
+) -> dict:
     policy = load_policy()
     with manifest_path.open("r", encoding="utf-8") as handle:
         manifest = json.load(handle)
@@ -328,8 +355,12 @@ def scan(manifest_path: Path, archive_path: Path | None = None) -> dict:
     temporary: tempfile.TemporaryDirectory[str] | None = None
     try:
         if archive_path is None and not findings:
-            temporary = tempfile.TemporaryDirectory(prefix="vanahub-scan-")
-            archive_path = Path(temporary.name) / "package.zip"
+            if archive_output is None:
+                temporary = tempfile.TemporaryDirectory(prefix="vanahub-scan-")
+                archive_path = Path(temporary.name) / "package.zip"
+            else:
+                archive_output.parent.mkdir(parents=True, exist_ok=True)
+                archive_path = archive_output
             try:
                 digest, size = download(manifest["downloadUrl"], archive_path, policy["limits"]["compressedBytes"])
                 if digest != manifest["sha256"]:
@@ -372,10 +403,13 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("manifest", type=Path)
     parser.add_argument("--archive", type=Path)
+    parser.add_argument("--archive-output", type=Path)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     try:
-        report = scan(args.manifest, args.archive)
+        if args.archive and args.archive_output:
+            raise ValueError("--archive and --archive-output cannot be used together")
+        report = scan(args.manifest, args.archive, archive_output=args.archive_output)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"scan failed: {exc}", file=sys.stderr)
         return 2

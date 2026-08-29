@@ -201,13 +201,13 @@ local function start_repository_cache(repository)
     state.operation = job; state.operation_context = { kind = 'repository-cache', repository = repository };
 end
 
-local function start_install(package, allow_elevated)
+local function start_install(package)
     local job, err = backend.start({
         operation = package.id == 'vanahub' and 'stageSelfUpdate' or (state.installed[package.id] and 'update' or 'install'),
         packageId = package.id, url = package.downloadUrl, sha256 = package.sha256,
         version = package.version,
         archiveRoot = package.archiveRoot or '', entrypoint = package.entrypoint,
-        allowElevated = allow_elevated == true, allowLocal = package._repository.local_source == true,
+        allowLocal = package._repository.local_source == true,
         githubOnly = package._repository.builtin == true,
     });
     if job == nil then state.notice = err; return; end
@@ -445,7 +445,7 @@ local function advance_profile_import()
                             transfer.errors[#transfer.errors + 1] = source.id .. ': imported ' .. source.version
                                 .. ', installed current ' .. tostring(package.version) .. '.';
                         end
-                        start_install(package, package._repository.builtin ~= true);
+                        start_install(package);
                         if state.operation ~= nil then state.operation_context.transfer = true; return;
                         else transfer.errors[#transfer.errors + 1] = source.id .. ': install could not be started.'; end
                     else transfer.errors[#transfer.errors + 1] = source.id .. ': no matching catalog package is available.'; end
@@ -808,16 +808,16 @@ local function draw_package_details(package)
         if imgui.Button('Uninstall') then start_uninstall(package.id); end
         if installed.sha256 ~= package.sha256 then
             imgui.SameLine();
-            if imgui.Button('Update') then start_install(package, package._repository.builtin ~= true); end
+            if imgui.Button('Update') then start_install(package); end
         end
         if package.id ~= 'vanahub' then
             imgui.TextColored(loaded and { 0.35, 0.85, 0.45, 1.0 } or { 0.65, 0.65, 0.65, 1.0 },
                 loaded and 'Loaded' or 'Not loaded');
         end
     elseif package._repository.builtin then
-        if imgui.Button('Install') then start_install(package, false); end
+        if imgui.Button('Install') then start_install(package); end
     elseif state.consent_package == package.sha256 then
-        if imgui.Button('Install custom artifact') then start_install(package, true); state.consent_package = nil; end
+        if imgui.Button('Install custom artifact') then start_install(package); state.consent_package = nil; end
         imgui.SameLine(); if imgui.Button('Cancel consent') then state.consent_package = nil; end
     elseif imgui.Button('Review custom-source warning') then state.consent_package = package.sha256; end
     if busy then imgui.EndDisabled(); end
