@@ -36,6 +36,10 @@
       "type": "array", "minItems": 1, "maxItems": 3, "uniqueItems": true,
       "items": { "type": "string", "enum": ["combat", "jobs", "inventory", "crafting", "economy", "maps-travel", "user-interface", "chat-communication", "data-tracking", "quality-of-life", "development-tools"] }
     },
+    "targets": {
+      "type": "array", "minItems": 1, "maxItems": 2, "uniqueItems": true,
+      "items": { "type": "string", "enum": ["retail", "horizon"] }
+    },
     "declaredCapabilities": {
       "type": "array", "uniqueItems": true,
       "items": { "type": "string", "enum": ["ui", "game-state-read", "packet-read", "chat-output", "command-handler", "settings-write", "bundled-file-read"] }

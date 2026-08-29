@@ -137,6 +137,13 @@ class CatalogScanTests(unittest.TestCase):
         self.assertFalse(rejected["accepted"])
         self.assertIn("manifest.categories", {f["rule_id"] for f in rejected["findings"]})
 
+    def test_accepts_known_targets_and_rejects_unknown_target(self):
+        accepted = self.run_scan({"sample/sample.lua": "return true"}, targets=["retail", "horizon"])
+        self.assertTrue(accepted["accepted"], accepted["findings"])
+        rejected = self.run_scan({"sample/sample.lua": "return true"}, targets=["horizon", "other"])
+        self.assertFalse(rejected["accepted"])
+        self.assertIn("manifest.targets", {finding["rule_id"] for finding in rejected["findings"]})
+
     def test_reports_network_for_semantic_review(self):
         report = self.run_scan({"sample/sample.lua": "local socket = require('socket')\n"})
         self.assertTrue(report["accepted"], report["findings"])

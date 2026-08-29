@@ -111,7 +111,7 @@ def validate_manifest(manifest: dict, provenance: dict | None = None) -> list[Fi
         "compressedSize", "archiveRoot", "entrypoint", "declaredCapabilities",
     }
     missing = sorted(required - manifest.keys())
-    optional = {"iconUrl", "screenshots", "categories"}
+    optional = {"iconUrl", "screenshots", "categories", "targets"}
     unknown = sorted(manifest.keys() - required - optional)
     if unknown:
         findings.append(Finding("manifest.unknown-fields", "error", f"Unknown fields: {', '.join(unknown)}"))
@@ -167,6 +167,18 @@ def validate_manifest(manifest: dict, provenance: dict | None = None) -> list[Fi
             findings.append(Finding(
                 "manifest.categories", "error",
                 "categories must contain 1 to 3 unique supported categories",
+            ))
+    if "targets" in manifest:
+        targets = manifest["targets"]
+        if not (
+            isinstance(targets, list)
+            and 1 <= len(targets) <= 2
+            and len(targets) == len(set(targets))
+            and all(target in {"retail", "horizon"} for target in targets)
+        ):
+            findings.append(Finding(
+                "manifest.targets", "error",
+                "targets must contain one or two unique supported targets",
             ))
     findings.extend(validate_distribution_provenance(manifest, provenance))
     if isinstance(manifest.get("sourceUrl"), str) and isinstance(manifest.get("downloadUrl"), str):

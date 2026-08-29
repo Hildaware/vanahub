@@ -788,6 +788,11 @@ local function draw_package_details(package)
         end
         imgui.TextWrapped('Categories: ' .. table.concat(labels, ', '));
     end
+    if type(package.targets) == 'table' then
+        imgui.TextWrapped('Targets: ' .. table.concat(package.targets, ', '));
+    else
+        imgui.TextWrapped('Targets: retail');
+    end
     if type(package.declaredCapabilities) == 'table' then
         imgui.TextWrapped('Technical access: ' .. table.concat(package.declaredCapabilities, ', '));
     end
