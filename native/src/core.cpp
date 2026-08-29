@@ -144,7 +144,7 @@ bool is_allowed_extension(std::string_view value) {
         ? std::string{} : ascii_casefold(value.substr(dot));
     static const std::set<std::string> allowed{
         "", ".lua", ".json", ".ini", ".xml", ".txt", ".md", ".png", ".jpg", ".jpeg",
-        ".dds", ".wav", ".ps1", ".sh", ".yml", ".yaml", ".gitmodules", ".gitattributes",
+        ".dds", ".wav", ".psd", ".ps1", ".sh", ".yml", ".yaml", ".gitmodules", ".gitattributes",
         ".gitignore", ".bmp"
     };
     return allowed.contains(extension);
