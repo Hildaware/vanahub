@@ -70,7 +70,7 @@ def validate_distribution_provenance(manifest: dict, provenance: dict | None) ->
         "upstreamReleaseUrl", "upstreamTag", "upstreamCommit", "license",
     }
     findings: list[Finding] = []
-    if set(provenance) - required - {"upstreamAsset", "buildRevision", "catalogSubmissionIssue"}:
+    if set(provenance) - required - {"upstreamAsset", "buildRevision", "catalogSubmissionIssue", "reviewedException"}:
         findings.append(Finding("provenance.unknown-fields", "error", "Distribution provenance contains unknown fields"))
     if not required.issubset(provenance):
         findings.append(Finding("provenance.missing-fields", "error", "Distribution provenance is incomplete"))
@@ -100,7 +100,44 @@ def validate_distribution_provenance(manifest: dict, provenance: dict | None) ->
     elif method == "vanahub-build":
         if not isinstance(provenance.get("buildRevision"), int) or provenance["buildRevision"] < 1:
             findings.append(Finding("provenance.build-revision", "error", "Invalid VanaHub build revision"))
+    exception = provenance.get("reviewedException")
+    if exception is not None:
+        required_exception = {"upstreamTag", "upstreamCommit", "allowedFindings", "rationale", "reviewer", "approvedAt"}
+        if not isinstance(exception, dict) or set(exception) - required_exception - {"assetId"} or not required_exception.issubset(exception):
+            findings.append(Finding("provenance.reviewed-exception", "error", "Reviewed exception is incomplete"))
+        elif (
+            exception.get("upstreamTag") != provenance.get("upstreamTag")
+            or exception.get("upstreamCommit") != provenance.get("upstreamCommit")
+            or not all(isinstance(exception.get(key), str) and exception[key] for key in ("rationale", "reviewer", "approvedAt"))
+            or not isinstance(exception.get("allowedFindings"), list)
+            or not exception["allowedFindings"]
+            or not all(
+                isinstance(item, dict)
+                and set(item) == {"ruleId", "path", "message"}
+                and all(isinstance(item.get(key), str) and item[key] for key in ("ruleId", "path", "message"))
+                for item in exception["allowedFindings"]
+            )
+        ):
+            findings.append(Finding("provenance.reviewed-exception", "error", "Reviewed exception does not match the immutable upstream release"))
+        elif "assetId" in exception:
+            asset = provenance.get("upstreamAsset")
+            if not isinstance(exception["assetId"], int) or not isinstance(asset, dict) or exception["assetId"] != asset.get("id"):
+                findings.append(Finding("provenance.reviewed-exception", "error", "Reviewed exception asset does not match upstream asset provenance"))
     return findings
+
+
+def apply_reviewed_exception(findings: list[Finding], provenance: dict | None) -> list[Finding]:
+    exception = (provenance or {}).get("reviewedException")
+    if not isinstance(exception, dict):
+        return findings
+    allowed = {(item["ruleId"], item["path"], item["message"]) for item in exception["allowedFindings"]}
+    result = []
+    for finding in findings:
+        if finding.severity == "error" and (finding.rule_id, finding.path, finding.message) in allowed:
+            result.append(Finding("reviewed-exception", "warning", f"Reviewed exception: {finding.message}", finding.path, finding.line, finding.capability))
+        else:
+            result.append(finding)
+    return result
 
 
 def validate_manifest(manifest: dict, provenance: dict | None = None) -> list[Finding]:
@@ -442,6 +479,7 @@ def scan(
                 findings.append(Finding("artifact.hash", "error", f"SHA-256 mismatch: got {data_hash}"))
         if archive_path is not None and archive_path.exists() and not findings:
             archive_findings, files, capabilities = scan_archive(archive_path, manifest, policy)
+            archive_findings = apply_reviewed_exception(archive_findings, provenance)
             findings.extend(archive_findings)
             declared = set(manifest.get("declaredCapabilities", []))
             for capability in sorted(capabilities - declared):

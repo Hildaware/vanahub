@@ -238,6 +238,20 @@ class CatalogScanTests(unittest.TestCase):
         )
         self.assertTrue(report["accepted"], report["findings"])
 
+    def test_reviewed_exception_waives_only_exact_structural_error(self):
+        provenance = self.distro_provenance("upstream-asset")
+        provenance["reviewedException"] = {
+            "upstreamTag": "v1.0.0", "upstreamCommit": "b" * 40,
+            "assetId": 99,
+            "allowedFindings": [{"ruleId": "zip.file-type", "path": "sample/remove.bat", "message": "File type .bat is prohibited"}],
+            "rationale": "Reviewed non-runtime helper.", "reviewer": "maintainer", "approvedAt": "2026-08-29",
+        }
+        report = self.run_scan_with_provenance(
+            {"sample/sample.lua": "return true", "sample/remove.bat": "echo helper"}, provenance,
+        )
+        self.assertTrue(report["accepted"], report["findings"])
+        self.assertIn("reviewed-exception", {finding["rule_id"] for finding in report["findings"]})
+
     def test_rejects_forged_distro_build_provenance(self):
         provenance = self.distro_provenance()
         provenance["distributorRepository"] = "https://github.com/attacker/distro"
