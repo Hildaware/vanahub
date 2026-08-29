@@ -61,7 +61,49 @@ def load_policy(path: Path = POLICY_PATH) -> dict:
         return json.load(handle)
 
 
-def validate_manifest(manifest: dict) -> list[Finding]:
+def validate_distribution_provenance(manifest: dict, provenance: dict | None) -> list[Finding]:
+    if provenance is None:
+        return []
+    required = {
+        "schemaVersion", "packageId", "distributionMethod", "distributorRepository",
+        "distroIssue", "distroCommit", "upstreamRepository", "upstreamReleaseId",
+        "upstreamReleaseUrl", "upstreamTag", "upstreamCommit", "license",
+    }
+    findings: list[Finding] = []
+    if set(provenance) - required - {"upstreamAsset", "buildRevision", "catalogSubmissionIssue"}:
+        findings.append(Finding("provenance.unknown-fields", "error", "Distribution provenance contains unknown fields"))
+    if not required.issubset(provenance):
+        findings.append(Finding("provenance.missing-fields", "error", "Distribution provenance is incomplete"))
+        return findings
+    checks = [
+        (provenance.get("schemaVersion") == 2, "provenance.schema", "Distribution provenance schemaVersion must be 2"),
+        (provenance.get("packageId") == manifest.get("id"), "provenance.package", "Distribution provenance package ID does not match"),
+        (provenance.get("distributionMethod") in {"upstream-asset", "vanahub-build"}, "provenance.method", "Unsupported distribution method"),
+        (provenance.get("distributorRepository") == "https://github.com/Hildaware/vanahub-addon-distro", "provenance.distributor", "Untrusted distributor repository"),
+        (provenance.get("upstreamRepository", "").rstrip("/").casefold() == manifest.get("sourceUrl", "").rstrip("/").casefold(), "provenance.upstream", "Upstream repository does not match sourceUrl"),
+        (isinstance(provenance.get("distroIssue"), int) and provenance["distroIssue"] > 0, "provenance.issue", "Invalid distro issue"),
+        (isinstance(provenance.get("distroCommit"), str) and bool(re.fullmatch(r"[0-9a-f]{40}", provenance["distroCommit"])), "provenance.commit", "Invalid distro commit"),
+        (isinstance(provenance.get("upstreamCommit"), str) and bool(re.fullmatch(r"[0-9a-f]{40}", provenance["upstreamCommit"])), "provenance.upstream-commit", "Invalid upstream commit"),
+        (isinstance(provenance.get("upstreamReleaseId"), int) and provenance["upstreamReleaseId"] > 0, "provenance.release", "Invalid upstream release ID"),
+        (isinstance(provenance.get("license"), str) and bool(provenance["license"]), "provenance.license", "Missing SPDX license"),
+    ]
+    for ok, rule, message in checks:
+        if not ok:
+            findings.append(Finding(rule, "error", message))
+    method = provenance.get("distributionMethod")
+    if method == "upstream-asset":
+        asset = provenance.get("upstreamAsset")
+        if not isinstance(asset, dict) or set(asset) != {"id", "name", "url"}:
+            findings.append(Finding("provenance.asset", "error", "Upstream asset provenance is incomplete"))
+        elif asset.get("url") != manifest.get("downloadUrl"):
+            findings.append(Finding("provenance.asset-url", "error", "Upstream asset URL does not match downloadUrl"))
+    elif method == "vanahub-build":
+        if not isinstance(provenance.get("buildRevision"), int) or provenance["buildRevision"] < 1:
+            findings.append(Finding("provenance.build-revision", "error", "Invalid VanaHub build revision"))
+    return findings
+
+
+def validate_manifest(manifest: dict, provenance: dict | None = None) -> list[Finding]:
     findings: list[Finding] = []
     required = {
         "schemaVersion", "id", "name", "description", "author", "maintainers",
@@ -126,11 +168,19 @@ def validate_manifest(manifest: dict) -> list[Finding]:
                 "manifest.categories", "error",
                 "categories must contain 1 to 3 unique supported categories",
             ))
+    findings.extend(validate_distribution_provenance(manifest, provenance))
     if isinstance(manifest.get("sourceUrl"), str) and isinstance(manifest.get("downloadUrl"), str):
         source = urllib.parse.urlparse(manifest["sourceUrl"]).path.strip("/").split("/")
         download = urllib.parse.urlparse(manifest["downloadUrl"]).path.strip("/").split("/")
         if len(source) >= 2 and len(download) >= 2 and [part.casefold() for part in source[:2]] != [part.casefold() for part in download[:2]]:
-            findings.append(Finding("manifest.repository-mismatch", "error", "Release asset must belong to sourceUrl repository"))
+            trusted_build = (
+                provenance is not None
+                and not any(item.rule_id.startswith("provenance.") for item in findings)
+                and provenance.get("distributionMethod") == "vanahub-build"
+                and [part.casefold() for part in download[:2]] == ["hildaware", "vanahub-addon-distro"]
+            )
+            if not trusted_build:
+                findings.append(Finding("manifest.repository-mismatch", "error", "Release asset must belong to sourceUrl repository"))
     privileged_source = load_policy().get("privilegedPackageSources", {}).get(manifest.get("id"))
     if privileged_source and manifest.get("sourceUrl", "").rstrip("/").casefold() != privileged_source.rstrip("/").casefold():
         findings.append(Finding("manifest.privileged-source", "error", "Privileged package id is reserved for its official source repository"))
@@ -345,11 +395,16 @@ def scan(
     manifest_path: Path,
     archive_path: Path | None = None,
     archive_output: Path | None = None,
+    provenance_path: Path | None = None,
 ) -> dict:
     policy = load_policy()
     with manifest_path.open("r", encoding="utf-8") as handle:
         manifest = json.load(handle)
-    findings = validate_manifest(manifest)
+    provenance = None
+    if provenance_path is not None:
+        with provenance_path.open("r", encoding="utf-8") as handle:
+            provenance = json.load(handle)
+    findings = validate_manifest(manifest, provenance)
     files: list[str] = []
     capabilities: set[str] = set()
     temporary: tempfile.TemporaryDirectory[str] | None = None
@@ -404,12 +459,13 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("manifest", type=Path)
     parser.add_argument("--archive", type=Path)
     parser.add_argument("--archive-output", type=Path)
+    parser.add_argument("--provenance", type=Path)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     try:
         if args.archive and args.archive_output:
             raise ValueError("--archive and --archive-output cannot be used together")
-        report = scan(args.manifest, args.archive, archive_output=args.archive_output)
+        report = scan(args.manifest, args.archive, archive_output=args.archive_output, provenance_path=args.provenance)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"scan failed: {exc}", file=sys.stderr)
         return 2

@@ -45,6 +45,45 @@ class CatalogScanTests(unittest.TestCase):
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             return catalog_scan.scan(manifest_path, archive)
 
+    def run_scan_with_provenance(self, files, provenance, **overrides):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            archive = self.make_zip(root, files)
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            manifest_path = root / "manifest.json"
+            manifest_path.write_text(
+                json.dumps(self.manifest(digest, archive.stat().st_size, **overrides)),
+                encoding="utf-8",
+            )
+            provenance_path = root / "provenance.json"
+            provenance_path.write_text(json.dumps(provenance), encoding="utf-8")
+            return catalog_scan.scan(manifest_path, archive, provenance_path=provenance_path)
+
+    def distro_provenance(self, method="vanahub-build"):
+        value = {
+            "schemaVersion": 2,
+            "packageId": "sample",
+            "distributionMethod": method,
+            "distributorRepository": "https://github.com/Hildaware/vanahub-addon-distro",
+            "distroIssue": 12,
+            "distroCommit": "a" * 40,
+            "upstreamRepository": "https://github.com/author/sample",
+            "upstreamReleaseId": 42,
+            "upstreamReleaseUrl": "https://github.com/author/sample/releases/tag/v1.0.0",
+            "upstreamTag": "v1.0.0",
+            "upstreamCommit": "b" * 40,
+            "license": "MIT",
+            "buildRevision": 1,
+        }
+        if method == "upstream-asset":
+            value.pop("buildRevision")
+            value["upstreamAsset"] = {
+                "id": 99,
+                "name": "sample.zip",
+                "url": "https://github.com/author/sample/releases/download/v1.0.0/sample.zip",
+            }
+        return value
+
     def test_accepts_restricted_addon(self):
         report = self.run_scan(
             {"sample/sample.lua": "local imgui = require('imgui')\nreturn true\n"},
@@ -183,6 +222,27 @@ class CatalogScanTests(unittest.TestCase):
         )
         self.assertFalse(report["accepted"])
         self.assertIn("manifest.repository-mismatch", {f["rule_id"] for f in report["findings"]})
+
+    def test_accepts_distro_build_with_valid_provenance(self):
+        report = self.run_scan_with_provenance(
+            {"sample/sample.lua": "return true"},
+            self.distro_provenance(),
+            downloadUrl="https://github.com/Hildaware/vanahub-addon-distro/releases/download/vanahub-build-sample-v1.0.0-r1/sample.zip",
+        )
+        self.assertTrue(report["accepted"], report["findings"])
+
+    def test_rejects_forged_distro_build_provenance(self):
+        provenance = self.distro_provenance()
+        provenance["distributorRepository"] = "https://github.com/attacker/distro"
+        report = self.run_scan_with_provenance(
+            {"sample/sample.lua": "return true"},
+            provenance,
+            downloadUrl="https://github.com/Hildaware/vanahub-addon-distro/releases/download/vanahub-build-sample-v1.0.0-r1/sample.zip",
+        )
+        self.assertFalse(report["accepted"])
+        rules = {finding["rule_id"] for finding in report["findings"]}
+        self.assertIn("provenance.distributor", rules)
+        self.assertIn("manifest.repository-mismatch", rules)
 
     def test_only_manager_package_may_ship_its_engine_dll(self):
         accepted = self.run_scan(
