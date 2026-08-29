@@ -76,11 +76,11 @@ rules:
     metadata: { category: security, capability: packet-injection, vanahub_risk: elevated }
     pattern: $OBJECT.InjectPacket(...)
 
-  - id: vanahub.lua.command-injection
+  - id: vanahub.lua.game-command-dispatch
     languages: [lua]
     severity: WARNING
-    message: Addon queues a game command assembled by addon code.
-    metadata: { category: security, capability: command-injection, vanahub_risk: elevated }
+    message: Addon dispatches an in-game command through Ashita.
+    metadata: { category: security, capability: game-command-dispatch, vanahub_risk: elevated }
     pattern-either:
       - pattern: $OBJECT.QueueCommand(...)
       - pattern: $OBJECT:QueueCommand(...)

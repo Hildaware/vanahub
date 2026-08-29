@@ -146,6 +146,23 @@ def merge_catalog_report(path: Path, semantic_report: dict) -> None:
     path.write_text(stable_json(catalog), encoding="utf-8")
 
 
+def summarize_findings(findings: list[dict]) -> list[dict]:
+    groups: dict[tuple[str, str], dict] = {}
+    for finding in findings:
+        if finding["reviewed"]:
+            continue
+        key = (finding["capability"], finding["risk"])
+        group = groups.setdefault(key, {"capability": key[0], "risk": key[1], "findings": 0, "files": set(), "examples": []})
+        group["findings"] += 1
+        group["files"].add(finding["path"])
+        if len(group["examples"]) < 3:
+            group["examples"].append({key: finding[key] for key in ("path", "line", "message")})
+    return [
+        {**group, "files": len(group["files"])}
+        for group in sorted(groups.values(), key=lambda value: (-value["findings"], value["capability"]))
+    ]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--semgrep", default="semgrep")
@@ -274,6 +291,7 @@ def main(argv: list[str] | None = None) -> int:
         "packageId": args.package_id,
         "accepted": not critical and not unapproved,
         "findings": findings,
+        "summary": summarize_findings(findings),
     }
     reviewed_commit = ""
     if args.source:

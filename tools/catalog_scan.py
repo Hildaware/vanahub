@@ -278,7 +278,7 @@ def lua_findings(text: str, path: str, policy: dict, local_modules: set[str] | N
         "package.loadlib": "native-interop", "loadstring": "dynamic-code",
         "load": "dynamic-code", "dofile": "dynamic-code", "debug": "dynamic-code",
         "ashita.memory.write": "memory-write", "InjectPacket": "packet-injection",
-        "QueueCommand": "command-injection", "CreateProcess": "process-execution",
+        "QueueCommand": "game-command-dispatch", "CreateProcess": "process-execution",
         "ShellExecute": "process-execution", "WinExec": "process-execution",
         "LoadLibrary": "native-interop", "RegSetValue": "registry-write",
         "URLDownloadToFile": "network",
