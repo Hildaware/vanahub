@@ -44,7 +44,7 @@ class SemanticScanTests(unittest.TestCase):
             return CompletedProcess(command, 0, "", "")
         return run
 
-    def arguments(self, archive: Path, report: Path, output: Path, baseline: Path | None = None):
+    def arguments(self, archive: Path, report: Path, output: Path, baseline: Path | None = None, reviewed_commit: str | None = None):
         values = [
             "--semgrep", "semgrep", "--rules", "policy/semgrep-lua.yml",
             "--archive", str(archive), "--archive-root", "sample",
@@ -53,6 +53,8 @@ class SemanticScanTests(unittest.TestCase):
         ]
         if baseline:
             values.extend(["--baseline", str(baseline)])
+        if reviewed_commit:
+            values.extend(["--reviewed-commit", reviewed_commit])
         return values
 
     def test_exact_baseline_approves_archive_findings_and_merges_report(self):
@@ -109,6 +111,19 @@ class SemanticScanTests(unittest.TestCase):
             self.assertEqual(finding["method"], "on_command")
             merged = json.loads(report.read_text(encoding="utf-8"))["findings"][0]
             self.assertEqual(merged["method"], "on_command")
+
+    def test_archive_scan_binds_candidate_to_the_supplied_upstream_commit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive, report, _ = self.fixture(root)
+            output = root / "bound"
+            commit = "a" * 40
+            with patch.object(semantic_scan.subprocess, "run", self.fake_semgrep()):
+                self.assertEqual(
+                    semantic_scan.main(self.arguments(archive, report, output, reviewed_commit=commit)), 1
+                )
+            candidate = json.loads((output / "semantic-review-candidate.json").read_text(encoding="utf-8"))
+            self.assertEqual(candidate["reviewedCommit"], commit)
 
     def test_parser_gap_requires_an_exact_file_review(self):
         with tempfile.TemporaryDirectory() as temporary:

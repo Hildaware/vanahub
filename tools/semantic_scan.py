@@ -281,6 +281,7 @@ def main(argv: list[str] | None = None) -> int:
     source_group.add_argument("--source", type=Path)
     source_group.add_argument("--archive", type=Path)
     parser.add_argument("--archive-root", default="")
+    parser.add_argument("--reviewed-commit")
     parser.add_argument("--package-id", required=True)
     parser.add_argument("--baseline", type=Path)
     parser.add_argument("--output-directory", type=Path, required=True)
@@ -407,8 +408,13 @@ def main(argv: list[str] | None = None) -> int:
         "findings": findings,
         "summary": summarize_findings(findings),
     }
-    reviewed_commit = ""
-    if args.source:
+    reviewed_commit = args.reviewed_commit or ""
+    if args.reviewed_commit and (
+        len(args.reviewed_commit) != 40
+        or any(character not in "0123456789abcdef" for character in args.reviewed_commit)
+    ):
+        raise ValueError("reviewed commit must be a lowercase 40-character SHA")
+    if args.source and not reviewed_commit:
         reviewed_commit = subprocess.run(
             ["git", "-C", str(source), "rev-parse", "HEAD"],
             check=False,
