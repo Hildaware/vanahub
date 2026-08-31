@@ -97,6 +97,19 @@ class SemanticScanTests(unittest.TestCase):
                     semantic_scan.main(self.arguments(archive, report, root / "critical", baseline)), 1
                 )
 
+    def test_reports_the_enclosing_lua_method_for_a_finding(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = "local function on_command()\n  os.execute('calc')\nend\n"
+            archive, report, _ = self.fixture(root, source)
+            output = root / "method"
+            with patch.object(semantic_scan.subprocess, "run", self.fake_semgrep()):
+                self.assertEqual(semantic_scan.main(self.arguments(archive, report, output)), 1)
+            finding = json.loads((output / "semantic-review.json").read_text(encoding="utf-8"))["findings"][0]
+            self.assertEqual(finding["method"], "on_command")
+            merged = json.loads(report.read_text(encoding="utf-8"))["findings"][0]
+            self.assertEqual(merged["method"], "on_command")
+
     def test_parser_gap_requires_an_exact_file_review(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

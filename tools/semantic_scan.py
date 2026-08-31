@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path, PurePosixPath
+import re
 import stat
 import subprocess
 import sys
@@ -25,6 +26,114 @@ STATIC_REVIEW_RULES = {
     "lua.invalid-module",
     "lua.obfuscated-line",
 }
+
+
+def lua_tokens(source: str) -> list[tuple[str, int]]:
+    """Return Lua tokens and their starting lines without parsing comments or strings."""
+    tokens: list[tuple[str, int]] = []
+    index = 0
+    line = 1
+    while index < len(source):
+        if source.startswith("--", index):
+            match = re.match(r"--\[(=*)\[", source[index:])
+            if match:
+                closing = "]" + match.group(1) + "]"
+                end = source.find(closing, index + len(match.group(0)))
+                end = len(source) if end < 0 else end + len(closing)
+            else:
+                end = source.find("\n", index)
+                end = len(source) if end < 0 else end
+            line += source[index:end].count("\n")
+            index = end
+            continue
+        character = source[index]
+        if character in "'\"":
+            quote = character
+            end = index + 1
+            while end < len(source):
+                if source[end] == "\\":
+                    end += 2
+                    continue
+                if source[end] == quote:
+                    end += 1
+                    break
+                end += 1
+            line += source[index:end].count("\n")
+            index = end
+            continue
+        match = re.match(r"\[(=*)\[", source[index:])
+        if match:
+            closing = "]" + match.group(1) + "]"
+            end = source.find(closing, index + len(match.group(0)))
+            end = len(source) if end < 0 else end + len(closing)
+            line += source[index:end].count("\n")
+            index = end
+            continue
+        if character.isspace():
+            if character == "\n":
+                line += 1
+            index += 1
+            continue
+        match = re.match(r"[A-Za-z_][A-Za-z0-9_]*", source[index:])
+        if match:
+            value = match.group(0)
+            tokens.append((value, line))
+            index += len(value)
+            continue
+        tokens.append((character, line))
+        index += 1
+    return tokens
+
+
+def lua_function_scopes(source: str) -> list[dict[str, int | str]]:
+    """Map named Lua function ranges with a conservative token-aware block stack."""
+    tokens = lua_tokens(source)
+    stack: list[dict[str, int | str]] = []
+    scopes: list[dict[str, int | str]] = []
+    last_line = source.count("\n") + 1
+    for index, (token, line) in enumerate(tokens):
+        if token == "function":
+            name_tokens: list[str] = []
+            cursor = index + 1
+            while cursor < len(tokens) and tokens[cursor][0] != "(":
+                candidate = tokens[cursor][0]
+                if candidate not in {".", ":"} and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", candidate):
+                    break
+                name_tokens.append(candidate)
+                cursor += 1
+            value = "".join(name_tokens)
+            name = value if value and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.:]*", value) else "<anonymous function>"
+            stack.append({"kind": "function", "name": name, "start": line})
+        elif token in {"if", "for", "while", "repeat"}:
+            stack.append({"kind": token, "start": line})
+        elif token == "do":
+            if not stack or stack[-1]["kind"] not in {"for", "while"}:
+                stack.append({"kind": "do", "start": line})
+        elif token == "until":
+            if stack and stack[-1]["kind"] == "repeat":
+                stack.pop()
+        elif token == "end" and stack:
+            closed = stack.pop()
+            if closed["kind"] == "function":
+                scopes.append({**closed, "end": line})
+    for scope in stack:
+        if scope["kind"] == "function":
+            scopes.append({**scope, "end": last_line})
+    return scopes
+
+
+def method_for_line(path: Path, line: int, cache: dict[Path, list[dict[str, int | str]]]) -> str:
+    if line <= 0:
+        return "<top-level>"
+    if path not in cache:
+        try:
+            cache[path] = lua_function_scopes(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError):
+            cache[path] = []
+    matches = [scope for scope in cache[path] if int(scope["start"]) <= line <= int(scope["end"])]
+    if not matches:
+        return "<top-level>"
+    return str(max(matches, key=lambda scope: int(scope["start"]))["name"])
 
 
 def stable_json(value: object) -> str:
@@ -134,6 +243,7 @@ def merge_catalog_report(path: Path, semantic_report: dict) -> None:
             "message": finding["message"],
             "path": finding["path"],
             "line": finding["line"],
+            "method": finding["method"],
             "capability": finding["capability"],
             "reviewed": finding["reviewed"],
         })
@@ -156,7 +266,7 @@ def summarize_findings(findings: list[dict]) -> list[dict]:
         group["findings"] += 1
         group["files"].add(finding["path"])
         if len(group["examples"]) < 3:
-            group["examples"].append({key: finding[key] for key in ("path", "line", "message")})
+            group["examples"].append({key: finding[key] for key in ("path", "line", "method", "message")})
     return [
         {**group, "files": len(group["files"])}
         for group in sorted(groups.values(), key=lambda value: (-value["findings"], value["capability"]))
@@ -211,6 +321,7 @@ def main(argv: list[str] | None = None) -> int:
     baseline = load_baseline(args.baseline.resolve() if args.baseline else None, args.package_id)
     raw = json.loads(raw_report.read_text(encoding="utf-8"))
     findings: list[dict] = []
+    scopes: dict[Path, list[dict[str, int | str]]] = {}
     unapproved: dict[str, str] = {}
     critical = False
     if args.catalog_report:
@@ -241,6 +352,7 @@ def main(argv: list[str] | None = None) -> int:
                 "capability": static.get("capability") or "elevated",
                 "path": relative,
                 "line": static.get("line") or 0,
+                "method": method_for_line(absolute, int(static.get("line") or 0), scopes),
                 "message": str(static.get("message") or "Static finding requires semantic review")[:2000],
                 "reviewed": reviewed,
             })
@@ -261,6 +373,7 @@ def main(argv: list[str] | None = None) -> int:
             "capability": metadata.get("capability", "elevated"),
             "path": relative,
             "line": result.get("start", {}).get("line", 0),
+            "method": method_for_line(absolute, int(result.get("start", {}).get("line", 0)), scopes),
             "message": result.get("extra", {}).get("message", "")[:2000],
             "reviewed": reviewed,
         })
@@ -282,6 +395,7 @@ def main(argv: list[str] | None = None) -> int:
             "capability": "analysis-gap",
             "path": relative,
             "line": line,
+            "method": method_for_line(absolute, int(line), scopes),
             "message": str(error.get("message", "Semgrep could not fully parse this file."))[:2000],
             "reviewed": reviewed,
         })
