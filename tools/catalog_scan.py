@@ -30,9 +30,10 @@ PACKAGE_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{1,63}$")
 SEMVER = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
 SHA256 = re.compile(r"^[a-f0-9]{64}$")
 GITHUB_RELEASE = re.compile(r"^https://github\.com/[^/]+/[^/]+/releases/download/[^/]+/[^/]+$")
+GITHUB_SOURCE_ARCHIVE = re.compile(r"^https://api\.github\.com/repos/[^/]+/[^/]+/zipball/[^/]+$")
 SOURCE_REPOSITORY = re.compile(r"^https://github\.com/[^/]+/[^/]+/?$")
 WINDOWS_DEVICES = {"con", "prn", "aux", "nul", "clock$", *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))}
-APPROVED_DOWNLOAD_HOSTS = {"github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"}
+APPROVED_DOWNLOAD_HOSTS = {"github.com", "api.github.com", "codeload.github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"}
 ELEVATED_PATTERNS = (
     ("native-interop", re.compile(r"\bffi\s*\.\s*load\s*\(|\bffi\s*\.\s*C\s*\.\s*[A-Za-z_][A-Za-z0-9_]*\s*\(", re.IGNORECASE)),
     ("process-execution", re.compile(r"\bos\s*\.\s*execute\s*\(|\bio\s*\.\s*popen\s*\(", re.IGNORECASE)),
@@ -160,7 +161,7 @@ def validate_manifest(manifest: dict, provenance: dict | None = None) -> list[Fi
         (isinstance(manifest.get("id"), str) and bool(PACKAGE_ID.fullmatch(manifest["id"])), "manifest.id", "Invalid package id"),
         (isinstance(manifest.get("version"), str) and bool(SEMVER.fullmatch(manifest["version"])), "manifest.version", "Version must be SemVer"),
         (isinstance(manifest.get("sha256"), str) and bool(SHA256.fullmatch(manifest["sha256"])), "manifest.sha256", "Invalid SHA-256"),
-        (isinstance(manifest.get("downloadUrl"), str) and bool(GITHUB_RELEASE.fullmatch(manifest["downloadUrl"])), "manifest.download-url", "Built-in packages must use a GitHub Release asset"),
+        (isinstance(manifest.get("downloadUrl"), str) and bool(GITHUB_RELEASE.fullmatch(manifest["downloadUrl"]) or GITHUB_SOURCE_ARCHIVE.fullmatch(manifest["downloadUrl"])), "manifest.download-url", "Built-in packages must use a GitHub Release asset or source ZIP"),
         (isinstance(manifest.get("sourceUrl"), str) and bool(SOURCE_REPOSITORY.fullmatch(manifest["sourceUrl"])), "manifest.source-url", "sourceUrl must be a public GitHub repository"),
         (isinstance(manifest.get("compressedSize"), int) and manifest["compressedSize"] > 0, "manifest.size", "compressedSize must be positive"),
         (isinstance(manifest.get("maintainers"), list) and len(manifest["maintainers"]) > 0, "manifest.maintainers", "At least one maintainer is required"),
@@ -220,7 +221,10 @@ def validate_manifest(manifest: dict, provenance: dict | None = None) -> list[Fi
     findings.extend(validate_distribution_provenance(manifest, provenance))
     if isinstance(manifest.get("sourceUrl"), str) and isinstance(manifest.get("downloadUrl"), str):
         source = urllib.parse.urlparse(manifest["sourceUrl"]).path.strip("/").split("/")
-        download = urllib.parse.urlparse(manifest["downloadUrl"]).path.strip("/").split("/")
+        download_url = urllib.parse.urlparse(manifest["downloadUrl"])
+        download = download_url.path.strip("/").split("/")
+        if download_url.hostname == "api.github.com" and download[:1] == ["repos"]:
+            download = download[1:]
         if len(source) >= 2 and len(download) >= 2 and [part.casefold() for part in source[:2]] != [part.casefold() for part in download[:2]]:
             trusted_build = (
                 provenance is not None

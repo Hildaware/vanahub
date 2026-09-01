@@ -91,6 +91,13 @@ class CatalogScanTests(unittest.TestCase):
         )
         self.assertTrue(report["accepted"], report["findings"])
 
+    def test_accepts_a_github_source_zip_url(self):
+        report = self.run_scan(
+            {"sample/sample.lua": "return true\n"},
+            downloadUrl="https://api.github.com/repos/author/sample/zipball/v1.0.0",
+        )
+        self.assertTrue(report["accepted"], report["findings"])
+
     def test_preserves_a_verified_download_for_semantic_review(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
