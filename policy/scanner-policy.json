@@ -1,7 +1,7 @@
 {
   "version": 3,
   "limits": {
-    "compressedBytes": 52428800,
+    "compressedBytes": 104857600,
     "expandedBytes": 209715200,
     "entryBytes": 52428800,
     "entries": 4096,
